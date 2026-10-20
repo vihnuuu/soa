@@ -1,0 +1,64 @@
+### Перевірка працездатності сервісу каталогу
+GET http://localhost:8080/api/catalog/health
+
+### Створення нової книги
+POST http://localhost:8080/api/catalog/books
+Content-Type: application/json
+
+{
+  "id": "4",
+  "title": "Дюна",
+  "author": "Френк Герберт",
+  "owner_id": "owner_1"
+}
+
+
+### Отримання інформації про книгу за її id
+GET http://localhost:8080/api/catalog/books/4?owner_id=owner_1
+
+### Отримання всіх книг
+GET http://localhost:8080/api/catalog/books?owner_id=owner_1
+
+### Оформлення позики книги
+POST http://localhost:8080/api/lending/loans
+Content-Type: application/json
+
+{
+  "book_id": "1",
+  "owner_id": "owner_1",
+  "borrower_name": "Solomiya"
+}
+
+### Спроба повторно видати ту саму книгу
+POST http://localhost:8080/api/lending/loans
+Content-Type: application/json
+
+{
+  "book_id": "4",
+  "owner_id": "owner_1",
+  "borrower_name": "Alice"
+}
+
+### Повернення
+POST http://localhost:8080/api/lending/loans/1/return
+Content-Type: application/json
+
+{}
+
+### Отримати тільки активні позики
+GET http://localhost:8080/api/lending/loans/active
+Accept: application/json
+
+### Отримати конкретну позику за ID
+GET http://localhost:8080/api/lending/loans/1
+Accept: application/json
+
+### Спроба видати неіснуючу книгу
+POST http://localhost:8080/api/lending/loans
+Content-Type: application/json
+
+{
+  "book_id": "999",
+  "owner_id": "owner_1",
+  "borrower_name": "Zakhar"
+}
