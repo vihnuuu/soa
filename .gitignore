@@ -4,3 +4,9 @@ __pycache__/
 .idea/
 .vscode/
 *.log
+.env
+*.env
+venv/
+*.pyo
+.pytest_cache/
+.coverage

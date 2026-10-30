@@ -24,7 +24,7 @@ services:
     restart: unless-stopped
     environment:
       CATALOG_SERVICE_URL: http://catalog-service:8001
-      RABBITMQ_HOST: rabbitmq
+      RABBIT_HOST: rabbitmq
     depends_on:
       catalog-service:
         condition: service_started
@@ -37,7 +37,7 @@ services:
     build: ./notification-service
     restart: unless-stopped
     environment:
-      RABBITMQ_HOST: rabbitmq
+      RABBIT_HOST: rabbitmq
     depends_on:
       rabbitmq:
         condition: service_healthy
