@@ -27,7 +27,6 @@ class EventPublisher:
                 )
             )
             channel = connection.channel()
-            channel.queue_declare(queue=self.queue_name, durable=True)
             channel.basic_publish(
                 exchange="",
                 routing_key=self.queue_name,
@@ -36,10 +35,10 @@ class EventPublisher:
                     delivery_mode=2,
                     content_type="application/json",
                 ),
-                mandatory=True,
+                mandatory=False,
             )
         except (pika.exceptions.AMQPError, OSError, ValueError) as exc:
-            raise EventPublishError() from exc
+            raise EventPublishError(f"{type(exc).__name__}: {exc}") from exc
         finally:
             if connection is not None and connection.is_open:
                 connection.close()

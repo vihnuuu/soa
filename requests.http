@@ -1,64 +1,79 @@
 ### Перевірка працездатності сервісу каталогу
 GET http://localhost:8080/api/catalog/health
+Accept: application/json
 
 ### Створення нової книги
 POST http://localhost:8080/api/catalog/books
 Content-Type: application/json
 
 {
-  "id": "4",
-  "title": "Дюна",
-  "author": "Френк Герберт",
-  "owner_id": "owner_1"
+  "id": "{{$random.uuid}}",
+  "title": "Макова війна",
+  "author": " Ребекка Кван",
+  "description": "Cирота війни з глухої провінції зробила неможливе — на відмінно склала загальноімперський іспит Кедзю...",
+  "owner_id": "00000000-0000-0000-0000-000000000002"
 }
 
+> {%
+    client.global.set("book_id", response.body.id);
+%}
 
-### Отримання інформації про книгу за її id
-GET http://localhost:8080/api/catalog/books/4?owner_id=owner_1
+### Отримання інформації про останню створену книгу за її ID
+GET http://localhost:8080/api/catalog/books/{{book_id}}?owner_id=00000000-0000-0000-0000-000000000002
+Accept: application/json
 
-### Отримання всіх книг
-GET http://localhost:8080/api/catalog/books?owner_id=owner_1
+### Отримання всіх книг власника
+GET http://localhost:8080/api/catalog/books?owner_id=00000000-0000-0000-0000-000000000002
+Accept: application/json
 
-### Оформлення позики книги
+### Оформлення позики (запуск SAGA та Outbox)
 POST http://localhost:8080/api/lending/loans
 Content-Type: application/json
 
 {
-  "book_id": "1",
-  "owner_id": "owner_1",
-  "borrower_name": "Solomiya"
+  "book_id": "{{book_id}}",
+  "owner_id": "00000000-0000-0000-0000-000000000002",
+  "borrower_name": "Степан Радченко"
 }
 
-### Спроба повторно видати ту саму книгу
-POST http://localhost:8080/api/lending/loans
-Content-Type: application/json
+> {%
+    client.global.set("loan_id", response.body.loan_id);
+%}
 
-{
-  "book_id": "4",
-  "owner_id": "owner_1",
-  "borrower_name": "Alice"
-}
+### Перевірка статусу позики після відпрацювання компенсації SAGA
+GET http://localhost:8080/api/lending/loans/{{loan_id}}
+Accept: application/json
 
-### Повернення
-POST http://localhost:8080/api/lending/loans/1/return
+### Отримати тільки активні позики
+GET http://localhost:8080/api/lending/loans/active?owner_id=00000000-0000-0000-0000-000000000002
+Accept: application/json
+
+### Отримати історію всіх позик
+GET http://localhost:8080/api/lending/loans/?owner_id=00000000-0000-0000-0000-000000000002
+Accept: application/json
+
+### Повернення книги
+POST http://localhost:8080/api/lending/loans/dbb555f8-4d09-4d40-8d4f-fea8335dede5/return
 Content-Type: application/json
 
 {}
 
-### Отримати тільки активні позики
-GET http://localhost:8080/api/lending/loans/active
-Accept: application/json
-
-### Отримати конкретну позику за ID
-GET http://localhost:8080/api/lending/loans/1
-Accept: application/json
-
-### Спроба видати неіснуючу книгу
+### Спроба видати неіснуючу книгу (404 Not Found)
 POST http://localhost:8080/api/lending/loans
 Content-Type: application/json
 
 {
-  "book_id": "999",
-  "owner_id": "owner_1",
-  "borrower_name": "Zakhar"
+  "book_id": "00000000-0000-0000-0000-000000000999",
+  "owner_id": "00000000-0000-0000-0000-000000000002",
+  "borrower_name": "Левко Завадський"
+}
+
+### Спроба передати невалідний UUID (422 Unprocessable Entity)
+POST http://localhost:8080/api/lending/loans
+Content-Type: application/json
+
+{
+  "book_id": "invalid-uuid",
+  "owner_id": "00000000-0000-0000-0000-000000000002",
+  "borrower_name": "Надійка Поліщук"
 }

@@ -1,34 +1,38 @@
-from src.broker.publisher import EventPublisher
+from datetime import datetime, timedelta, timezone
 from src.clients.catalog_client import CatalogClient
 from src.loans.exceptions import (
     BookAlreadyLoanedError,
-    EventPublishError,
     LoanAlreadyReturnedError,
     LoanNotFoundError,
 )
+from src.loans.models import Loan, OutboxMessage, OutboxStatus
 from src.loans.repository import LoanRepository
 from src.loans.schemas import LoanRequest
 
 
 class LoanService:
+
     def __init__(
         self,
         repository: LoanRepository,
         catalog_client: CatalogClient,
-        publisher: EventPublisher,
     ) -> None:
         self.repository = repository
         self.catalog_client = catalog_client
-        self.publisher = publisher
 
-    async def get_loan(self, loan_id: str) -> dict:
+    async def get_loan(self, loan_id: str) -> Loan:
         loan = await self.repository.get_by_id(loan_id)
         if not loan:
             raise LoanNotFoundError()
         return loan
 
-    async def get_active_loans(self) -> list[dict]:
-        return await self.repository.list_active()
+    async def get_active_loans(
+        self, owner_id: str | None = None
+    ) -> list[Loan]:
+        return await self.repository.list_active(owner_id)
+
+    async def get_loans(self, owner_id: str | None = None) -> list[Loan]:
+        return await self.repository.list_all(owner_id)
 
     async def create_loan(self, loan_in: LoanRequest) -> str:
         await self.catalog_client.verify_book(
@@ -40,53 +44,62 @@ class LoanService:
             raise BookAlreadyLoanedError()
 
         loan_id = await self.repository.get_next_id()
+        now = datetime.now(timezone.utc)
+        due_date = now + timedelta(days=14)
+
         record = {
-            "loan_id": loan_id,
-            "book_id": loan_in.book_id,
+            "loan_id": str(loan_id),
+            "book_id": str(loan_in.book_id),
             "borrower_name": loan_in.borrower_name,
-            "owner_id": loan_in.owner_id,
-            "status": "Active",
+            "owner_id": str(loan_in.owner_id),
+            "status": "PENDING",
+            "loan_date": now.isoformat(),
+            "due_date": due_date.isoformat(),
         }
-        await self.repository.create(record)
 
-        event_payload = {
-            "event_type": "LoanCreated",
-            "loan_id": loan_id,
-            "book_id": loan_in.book_id,
-            "borrower_name": loan_in.borrower_name,
-            "owner_id": loan_in.owner_id,
-        }
-        try:
-            await self.publisher.publish(event_payload)
-        except EventPublishError:
-            await self.repository.delete(loan_id=loan_id, book_id=loan_in.book_id)
-            raise
+        outbox_event = OutboxMessage(
+            event_type="LoanCreated",
+            payload=record,
+            status=OutboxStatus.NEW,
+        )
 
-        return loan_id
+        await self.repository.create_with_outbox(record, outbox_event)
+        return str(loan_id)
 
     async def return_loan(self, loan_id: str) -> str:
         record = await self.repository.get_by_id(loan_id)
         if not record:
             raise LoanNotFoundError()
 
-        if record["status"] != "Active":
+        current_status = getattr(record, "status", None)
+        status_str = (
+            current_status.value
+            if hasattr(current_status, "value")
+            else str(current_status)
+        )
+
+        if status_str.upper() != "ACTIVE":
             raise LoanAlreadyReturnedError()
 
-        await self.repository.update_status(loan_id, "Returned")
-        await self.repository.remove_active_book(record["book_id"])
+        actual_loan_id = getattr(record, "id", None) or getattr(
+            record, "loan_id", loan_id
+        )
 
-        event_payload = {
-            "event_type": "LoanReturned",
-            "loan_id": record["loan_id"],
-            "book_id": record["book_id"],
-            "borrower_name": record["borrower_name"],
-            "owner_id": record["owner_id"],
-        }
-        try:
-            await self.publisher.publish(event_payload)
-        except EventPublishError:
-            await self.repository.update_status(loan_id, "Active")
-            await self.repository.add_active_book(record["book_id"])
-            raise
+        outbox_event = OutboxMessage(
+            event_type="LoanReturned",
+            payload={
+                "loan_id": str(actual_loan_id),
+                "book_id": str(record.book_id),
+                "borrower_name": record.borrower_name,
+                "owner_id": (
+                    str(record.owner_id) if hasattr(record, "owner_id") else ""
+                ),
+            },
+            status=OutboxStatus.NEW,
+        )
+        await self.repository.update_status_with_outbox(
+            str(actual_loan_id), "RETURNED", outbox_event
+        )
+        await self.repository.remove_active_book(str(record.book_id))
 
-        return loan_id
+        return str(actual_loan_id)

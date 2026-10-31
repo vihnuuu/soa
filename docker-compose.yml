@@ -1,4 +1,24 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: library_postgres
+    environment:
+      POSTGRES_USER: library_user
+      POSTGRES_PASSWORD: library_password
+      POSTGRES_DB: catalog_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U library_user -d catalog_db" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - library_net
+
   rabbitmq:
     image: rabbitmq:3-management
     restart: unless-stopped
@@ -16,6 +36,11 @@ services:
   catalog-service:
     build: ./catalog-service
     restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://library_user:library_password@postgres:5432/catalog_db
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - library_net
 
@@ -23,9 +48,12 @@ services:
     build: ./lending-service
     restart: unless-stopped
     environment:
+      DATABASE_URL: postgresql+asyncpg://library_user:library_password@postgres:5432/lending_db
       CATALOG_SERVICE_URL: http://catalog-service:8001
       RABBIT_HOST: rabbitmq
     depends_on:
+      postgres:
+        condition: service_healthy
       catalog-service:
         condition: service_started
       rabbitmq:
@@ -37,8 +65,12 @@ services:
     build: ./notification-service
     restart: unless-stopped
     environment:
+      DATABASE_URL: postgresql+asyncpg://library_user:library_password@postgres:5432/notification_db
       RABBIT_HOST: rabbitmq
+      SIMULATE_SAGA_FAULT: "false"
     depends_on:
+      postgres:
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
     networks:
@@ -55,8 +87,12 @@ services:
     depends_on:
       - lending-service
       - catalog-service
+      - notification-service
     networks:
       - library_net
+
+volumes:
+  postgres_data:
 
 networks:
   library_net:
