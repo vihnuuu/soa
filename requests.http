@@ -53,7 +53,7 @@ GET http://localhost:8080/api/lending/loans/?owner_id=00000000-0000-0000-0000-00
 Accept: application/json
 
 ### Повернення книги
-POST http://localhost:8080/api/lending/loans/dbb555f8-4d09-4d40-8d4f-fea8335dede5/return
+POST http://localhost:8080/api/lending/loans/{{loan_id}}/return
 Content-Type: application/json
 
 {}

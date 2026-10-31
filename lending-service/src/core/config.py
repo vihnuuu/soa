@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     rabbit_dlq: str = "loan_notifications_dlq"
     environment: str = "development"
     debug: bool = False
+    saga_timeout_seconds: int = 30
 
     database_url: PostgresDsn = (
         "postgresql+asyncpg://library_user:library_password@postgres:5432/lending_db"

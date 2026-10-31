@@ -6,6 +6,7 @@ from src.core.database import Base, engine
 from src.loans.models import Loan, OutboxMessage
 from src.loans.router import router as loans_router
 from src.loans.saga_compensator import run_saga_dlq_consumer
+from src.loans.timeout_watcher import run_saga_timeout_watcher
 from src.loans.worker import process_outbox_messages
 
 
@@ -14,17 +15,15 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    outbox_task = asyncio.create_task(process_outbox_messages())
-    compensator_task = asyncio.create_task(run_saga_dlq_consumer())
+    tasks = [
+        asyncio.create_task(process_outbox_messages()),
+        asyncio.create_task(run_saga_dlq_consumer()),
+        asyncio.create_task(run_saga_timeout_watcher()),
+    ]
     yield
-    outbox_task.cancel()
-    compensator_task.cancel()
-    try:
-        await asyncio.gather(
-            outbox_task, compensator_task, return_exceptions=True
-        )
-    except asyncio.CancelledError:
-        pass
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 app = FastAPI(

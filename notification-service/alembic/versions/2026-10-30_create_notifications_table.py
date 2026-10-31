@@ -21,14 +21,17 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.create_table('notification',
         sa.Column('id', sa.UUID(), nullable=False),
+        sa.Column('loan_id', sa.UUID(), nullable=False),
         sa.Column('recipient', sa.String(length=255), nullable=False),
         sa.Column('message', sa.Text(), nullable=False),
         sa.Column('status', sa.Enum('PENDING', 'SENT', 'FAILED', name='notification_status_enum'), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint('id', name=op.f('notification_pkey'))
     )
+    op.create_index(op.f('notification_loan_id_idx'), 'notification', ['loan_id'], unique=False)
 
 
 def downgrade() -> None:
+    op.drop_index(op.f('notification_loan_id_idx'), table_name='notification')
     op.drop_table('notification')
     sa.Enum(name='notification_status_enum').drop(op.get_bind(), checkfirst=True)

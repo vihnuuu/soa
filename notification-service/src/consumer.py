@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 import pika
@@ -26,7 +27,7 @@ class NotificationConsumer:
             raw_data = json.loads(body.decode("utf-8"))
             event = LoanNotificationEvent.model_validate(raw_data)
 
-            self.service.handle_event(event)
+            asyncio.run(self.service.handle_event(event))
             ch.basic_ack(delivery_tag=method.delivery_tag)
 
 

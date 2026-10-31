@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     rabbit_queue: str = "loan_notifications"
     rabbit_dlq: str = "loan_notifications_dlq"
     environment: str = "development"
+    simulate_saga_fault: bool = False
 
     database_url: PostgresDsn = (
         "postgresql+asyncpg://library_user:library_password@postgres:5432/notification_db"
