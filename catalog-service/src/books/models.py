@@ -14,4 +14,7 @@ class Book(Base):
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     author: Mapped[str] = mapped_column(String(255), nullable=False)
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
     is_available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

@@ -1,10 +1,14 @@
 from fastapi import Depends
-from src.books.repository import BookRepository, book_repository
+from sqlalchemy.ext.asyncio import AsyncSession
+from src.books.repository import BookRepository
 from src.books.service import BookService
+from src.core.database import get_db_session
 
 
-def get_book_repository() -> BookRepository:
-    return book_repository
+def get_book_repository(
+    session: AsyncSession = Depends(get_db_session),
+) -> BookRepository:
+    return BookRepository(session)
 
 
 def get_book_service(
