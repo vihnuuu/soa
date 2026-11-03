@@ -27,6 +27,28 @@ class EventPublisher:
                 )
             )
             channel = connection.channel()
+            channel.confirm_delivery()
+
+            channel.exchange_declare(
+                exchange=settings.rabbit_dlx,
+                exchange_type="direct",
+                durable=True,
+            )
+            channel.queue_declare(queue=settings.rabbit_dlq, durable=True)
+            channel.queue_bind(
+                exchange=settings.rabbit_dlx,
+                queue=settings.rabbit_dlq,
+                routing_key=self.queue_name,
+            )
+            channel.queue_declare(
+                queue=self.queue_name,
+                durable=True,
+                arguments={
+                    "x-dead-letter-exchange": settings.rabbit_dlx,
+                    "x-dead-letter-routing-key": self.queue_name,
+                },
+            )
+
             channel.basic_publish(
                 exchange="",
                 routing_key=self.queue_name,
@@ -35,7 +57,7 @@ class EventPublisher:
                     delivery_mode=2,
                     content_type="application/json",
                 ),
-                mandatory=False,
+                mandatory=True,
             )
         except (pika.exceptions.AMQPError, OSError, ValueError) as exc:
             raise EventPublishError(f"{type(exc).__name__}: {exc}") from exc

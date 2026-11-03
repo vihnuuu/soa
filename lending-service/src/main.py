@@ -8,7 +8,7 @@ from src.loans.router import router as loans_router
 from src.loans.saga_compensator import run_saga_dlq_consumer
 from src.loans.timeout_watcher import run_saga_timeout_watcher
 from src.loans.worker import process_outbox_messages
-
+from src.loans.saga_confirmer import run_saga_confirmer
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -19,6 +19,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(process_outbox_messages()),
         asyncio.create_task(run_saga_dlq_consumer()),
         asyncio.create_task(run_saga_timeout_watcher()),
+        asyncio.create_task(run_saga_confirmer()),
     ]
     yield
     for task in tasks:

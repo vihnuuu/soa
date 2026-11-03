@@ -1,32 +1,35 @@
 import uuid
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from src.core.config import settings
 from src.notifications.models import Notification, NotificationStatus
 
 
 class NotificationRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
 
-  def __init__(self, session: AsyncSession) -> None:
-    self.session = session
+    async def save_notification(
+        self,
+        event_id: str | uuid.UUID,
+        loan_id: str | uuid.UUID,
+        recipient: str,
+        message: str,
+        status: NotificationStatus = NotificationStatus.SENT,
+    ) -> bool:
+        eid = uuid.UUID(str(event_id))
+        lid = uuid.UUID(str(loan_id))
 
-  async def save_notification(
-      self, loan_id: str, recipient: str, message: str
-  ) -> Notification:
-    if settings.simulate_saga_fault:
-      raise IntegrityError(
-          statement="INSERT INTO notification ...",
-          params={},
-          orig=Exception("Збій запису в БД: змодельоване порушення обмеження"),
-      )
-
-    notification = Notification(
-        id=uuid.uuid4(),
-        loan_id=uuid.UUID(loan_id),
-        recipient=recipient,
-        message=message,
-        status=NotificationStatus.SENT,
-    )
-    self.session.add(notification)
-    await self.session.commit()
-    return notification
+        stmt = (
+            insert(Notification)
+            .values(
+                event_id=eid,
+                loan_id=lid,
+                recipient=str(recipient),
+                message=message,
+                status=status,
+            )
+            .on_conflict_do_nothing(index_elements=["event_id"])
+        )
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return result.rowcount > 0

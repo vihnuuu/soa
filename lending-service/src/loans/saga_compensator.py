@@ -54,22 +54,37 @@ async def run_saga_dlq_consumer() -> None:
 
                 async with queue.iterator() as queue_iter:
                     async for message in queue_iter:
-                        async with message.process():
-                            try:
-                                data = json.loads(message.body.decode("utf-8"))
-                                loan_id = data.get("payload", {}).get("loan_id")
-                                if loan_id:
-                                    logger.warning(
-                                        f"[SAGA Compensator] Отримано повідомлення з DLQ для позики {loan_id}"
-                                    )
-                                    await compensate_loan(loan_id)
-                            except Exception as err:
-                                logger.error(
-                                    f"[SAGA Compensator] Помилка обробки повідомлення з DLQ: {err}"
-                                )
+                        try:
+                            data = json.loads(message.body.decode("utf-8"))
+                            loan_id = data.get("payload", {}).get("loan_id")
+                        except Exception as parse_err:
+                            logger.error(
+                                f"[SAGA Compensator] Некоректний формат повідомлення з DLQ: {parse_err}"
+                            )
+                            await message.ack()
+                            continue
+
+                        if not loan_id:
+                            await message.ack()
+                            continue
+
+                        try:
+                            logger.warning(
+                                f"[SAGA Compensator] Отримано повідомлення з DLQ для позики {loan_id}"
+                            )
+                            await compensate_loan(loan_id)
+                            await message.ack()
+                        except Exception as err:
+                            logger.error(
+                                f"[SAGA Compensator] Помилка обробки повідомлення з DLQ: {err}"
+                            )
+                            await message.nack(requeue=True)
+                            await asyncio.sleep(1)
 
         except asyncio.CancelledError:
             break
         except Exception as exc:
-            logger.error(f"[SAGA Compensator] Втрата з'єднання з RabbitMQ: {exc}. Спроба через 3 сек...")
+            logger.error(
+                f"[SAGA Compensator] Втрата з'єднання з RabbitMQ: {exc}. Спроба через 3 сек..."
+            )
             await asyncio.sleep(3)

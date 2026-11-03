@@ -1,6 +1,8 @@
 import uuid
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from src.books.exceptions import BookAlreadyExistsError
 from src.books.models import Book
 from src.books.schemas import BookCreate
 
@@ -20,6 +22,7 @@ def _to_dict(book: Book) -> dict:
         "title": book.title,
         "author": book.author,
         "owner_id": str(book.owner_id),
+        "is_available": book.is_available,
     }
 
 
@@ -50,7 +53,32 @@ class BookRepository:
             title=book_data.title,
             author=book_data.author,
             owner_id=book_data.owner_id,
+            is_available=book_data.is_available,
         )
         self.session.add(book)
+        try:
+            await self.session.commit()
+        except IntegrityError:
+            await self.session.rollback()
+            raise BookAlreadyExistsError()
+        await self.session.refresh(book)
+        return _to_dict(book)
+
+    async def update_availability(
+        self,
+        book_id: str,
+        is_available: bool,
+    ) -> dict | None:
+        uid = _to_uuid(book_id)
+        if uid is None:
+            return None
+
+        book = await self.session.get(Book, uid)
+        if book is None:
+            return None
+
+        book.is_available = is_available
         await self.session.commit()
+        await self.session.refresh(book)
+
         return _to_dict(book)

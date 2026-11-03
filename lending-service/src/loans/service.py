@@ -1,13 +1,19 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from src.clients.catalog_client import CatalogClient
 from src.loans.exceptions import (
     BookAlreadyLoanedError,
+    BookCatalogNotFoundError,
+    CatalogServiceBadResponseError,
+    CatalogServiceUnavailableError,
     LoanAlreadyReturnedError,
     LoanNotFoundError,
 )
 from src.loans.models import Loan, OutboxMessage, OutboxStatus
 from src.loans.repository import LoanRepository
 from src.loans.schemas import LoanRequest
+
+logger = logging.getLogger("loan_service")
 
 
 class LoanService:
@@ -35,10 +41,13 @@ class LoanService:
         return await self.repository.list_all(owner_id)
 
     async def create_loan(self, loan_in: LoanRequest) -> str:
-        await self.catalog_client.verify_book(
-            book_id=loan_in.book_id,
-            owner_id=loan_in.owner_id,
+        book = await self.catalog_client.verify_book(
+            book_id=str(loan_in.book_id),
+            owner_id=str(loan_in.owner_id),
         )
+
+        if not book.get("is_available", True):
+            raise BookAlreadyLoanedError()
 
         if await self.repository.is_book_active(loan_in.book_id):
             raise BookAlreadyLoanedError()
@@ -97,9 +106,23 @@ class LoanService:
             },
             status=OutboxStatus.NEW,
         )
+
         await self.repository.update_status_with_outbox(
             str(actual_loan_id), "RETURNED", outbox_event
         )
-        await self.repository.remove_active_book(str(record.book_id))
+
+        try:
+            await self.catalog_client.update_book_availability(
+                str(record.book_id), True
+            )
+        except (
+            CatalogServiceUnavailableError,
+            BookCatalogNotFoundError,
+            CatalogServiceBadResponseError,
+        ) as exc:
+            logger.warning(
+                f"Не вдалося оновити доступність книги {record.book_id} у каталозі: "
+                f"{type(exc).__name__}"
+            )
 
         return str(actual_loan_id)

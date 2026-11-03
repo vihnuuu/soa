@@ -3,6 +3,8 @@ import uuid
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.loans.models import Loan, LoanStatus, OutboxMessage
+from sqlalchemy.exc import IntegrityError
+from src.loans.exceptions import BookAlreadyLoanedError
 
 
 class LoanRepository:
@@ -28,42 +30,27 @@ class LoanRepository:
     return result.scalar_one_or_none() is not None
 
   async def create_with_outbox(
-      self, record: dict, outbox_event: OutboxMessage
+          self, record: dict, outbox_event: OutboxMessage
   ) -> None:
-    loan_kwargs = {
-        "id": (
-            uuid.UUID(record["loan_id"])
-            if isinstance(record["loan_id"], str)
-            else record["loan_id"]
-        ),
-        "book_id": (
-            uuid.UUID(record["book_id"])
-            if isinstance(record["book_id"], str)
-            else record["book_id"]
-        ),
-        "borrower_name": record["borrower_name"],
-        "status": LoanStatus(record["status"]),
-    }
-
-    if hasattr(Loan, "owner_id") and "owner_id" in record and record["owner_id"]:
-      loan_kwargs["owner_id"] = (
-          uuid.UUID(record["owner_id"])
-          if isinstance(record["owner_id"], str)
-          else record["owner_id"]
+      raw_due = record.get("due_date")
+      loan = Loan(
+          id=uuid.UUID(str(record["loan_id"])),
+          book_id=uuid.UUID(str(record["book_id"])),
+          owner_id=uuid.UUID(str(record["owner_id"])),
+          borrower_name=record["borrower_name"],
+          status=LoanStatus(record["status"]),
+          due_date=(
+              datetime.fromisoformat(raw_due) if isinstance(raw_due, str) else raw_due
+          ),
       )
+      self.session.add(loan)
+      self.session.add(outbox_event)
 
-    if hasattr(Loan, "due_date") and "due_date" in record and record["due_date"]:
-      raw_due = record["due_date"]
-      loan_kwargs["due_date"] = (
-          datetime.fromisoformat(raw_due)
-          if isinstance(raw_due, str)
-          else raw_due
-      )
-
-    loan = Loan(**loan_kwargs)
-    self.session.add(loan)
-    self.session.add(outbox_event)
-    await self.session.commit()
+      try:
+          await self.session.commit()
+      except IntegrityError:
+          await self.session.rollback()
+          raise BookAlreadyLoanedError()
 
   async def update_status_with_outbox(
           self, loan_id: str | uuid.UUID, status: str, outbox_event: OutboxMessage
@@ -80,8 +67,6 @@ class LoanRepository:
       self.session.add(outbox_event)
       await self.session.commit()
 
-  async def remove_active_book(self, book_id: str | uuid.UUID) -> None:
-    pass
 
   async def get_next_id(self) -> str:
     return str(uuid.uuid4())
@@ -92,12 +77,8 @@ class LoanRepository:
     query = select(Loan).where(Loan.status == LoanStatus.ACTIVE)
     if owner_id:
       if isinstance(owner_id, str):
-        try:
-          owner_id = uuid.UUID(owner_id)
-        except ValueError:
-          pass
-      if hasattr(Loan, "owner_id"):
-        query = query.where(Loan.owner_id == owner_id)
+        owner_id = uuid.UUID(owner_id)
+      query = query.where(Loan.owner_id == owner_id)
     result = await self.session.execute(query)
     return list(result.scalars().all())
 
@@ -107,11 +88,7 @@ class LoanRepository:
     query = select(Loan)
     if owner_id:
       if isinstance(owner_id, str):
-        try:
-          owner_id = uuid.UUID(owner_id)
-        except ValueError:
-          pass
-      if hasattr(Loan, "owner_id"):
-        query = query.where(Loan.owner_id == owner_id)
+        owner_id = uuid.UUID(owner_id)
+      query = query.where(Loan.owner_id == owner_id)
     result = await self.session.execute(query)
     return list(result.scalars().all())

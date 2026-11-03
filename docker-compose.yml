@@ -67,7 +67,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://library_user:library_password@postgres:5432/notification_db
       RABBIT_HOST: rabbitmq
-      SIMULATE_SAGA_FAULT: "false"
+      SIMULATE_SAGA_FAULT: "${SIMULATE_SAGA_FAULT:-false}"
     depends_on:
       postgres:
         condition: service_healthy

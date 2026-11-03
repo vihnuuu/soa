@@ -22,12 +22,19 @@ def upgrade() -> None:
     op.create_table('loan',
         sa.Column('id', sa.UUID(), nullable=False),
         sa.Column('book_id', sa.UUID(), nullable=False),
+        sa.Column('owner_id', sa.UUID(), nullable=False),
         sa.Column('borrower_name', sa.String(length=128), nullable=False),
         sa.Column('status', sa.Enum('PENDING', 'ACTIVE', 'CANCELLED', 'RETURNED', name='loan_status_enum'), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('due_date', sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint('id', name=op.f('loan_pkey'))
     )
     op.create_index(op.f('loan_book_id_idx'), 'loan', ['book_id'], unique=False)
+    op.create_index(op.f('loan_owner_id_idx'), 'loan', ['owner_id'], unique=False)
+    op.create_index(
+        'uq_active_loan_per_book', 'loan', ['book_id'], unique=True,
+        postgresql_where=sa.text("status IN ('PENDING', 'ACTIVE')"),
+    )
 
     op.create_table('outbox_message',
         sa.Column('id', sa.UUID(), nullable=False),
@@ -47,6 +54,8 @@ def downgrade() -> None:
     op.drop_table('outbox_message')
     sa.Enum(name='outbox_status_enum').drop(op.get_bind(), checkfirst=True)
 
+    op.drop_index('uq_active_loan_per_book', table_name='loan')
+    op.drop_index(op.f('loan_owner_id_idx'), table_name='loan')
     op.drop_index(op.f('loan_book_id_idx'), table_name='loan')
     op.drop_table('loan')
     sa.Enum(name='loan_status_enum').drop(op.get_bind(), checkfirst=True)

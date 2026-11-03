@@ -7,11 +7,11 @@ POST http://localhost:8080/api/catalog/books
 Content-Type: application/json
 
 {
-  "id": "{{$random.uuid}}",
+  "id": "{{$uuid}}",
   "title": "Мистецтво війни",
   "author": "Сунь-цзи",
-  "description": "Книга  навчає, перш за все, стратегій, тактик та способів переговорів, які у Китаї та китайській філософській думці вважаються...",
-  "owner_id": "00000000-0000-0000-0000-000000000002"
+  "owner_id": "00000000-0000-0000-0000-000000000002",
+  "is_available": true
 }
 
 > {%
@@ -26,7 +26,7 @@ Accept: application/json
 GET http://localhost:8080/api/catalog/books?owner_id=00000000-0000-0000-0000-000000000002
 Accept: application/json
 
-### Оформлення позики (запуск SAGA та Outbox)
+### Оформлення позики (запуск SAGA та Outbox) — Очікується 202 Accepted
 POST http://localhost:8080/api/lending/loans
 Content-Type: application/json
 
@@ -40,7 +40,17 @@ Content-Type: application/json
     client.global.set("loan_id", response.body.loan_id);
 %}
 
-### Перевірка статусу позики після відпрацювання компенсації SAGA
+### Спроба повторно оформити позику на ту ж саму книгу (Гонка / Частковий індекс -> Очікується 409 Conflict)
+POST http://localhost:8080/api/lending/loans
+Content-Type: application/json
+
+{
+  "book_id": "{{book_id}}",
+  "owner_id": "00000000-0000-0000-0000-000000000002",
+  "borrower_name": "Паралельний запит"
+}
+
+### Перевірка статусу позики після обробки Outbox/SAGA
 GET http://localhost:8080/api/lending/loans/{{loan_id}}
 Accept: application/json
 
@@ -49,7 +59,7 @@ GET http://localhost:8080/api/lending/loans/active?owner_id=00000000-0000-0000-0
 Accept: application/json
 
 ### Отримати історію всіх позик
-GET http://localhost:8080/api/lending/loans/?owner_id=00000000-0000-0000-0000-000000000002
+GET http://localhost:8080/api/lending/loans?owner_id=00000000-0000-0000-0000-000000000002
 Accept: application/json
 
 ### Повернення книги
@@ -58,7 +68,7 @@ Content-Type: application/json
 
 {}
 
-### Спроба видати неіснуючу книгу (404 Not Found)
+### Спроба видати неіснуючу книгу (Очікується 404 Not Found)
 POST http://localhost:8080/api/lending/loans
 Content-Type: application/json
 
@@ -68,7 +78,7 @@ Content-Type: application/json
   "borrower_name": "Левко Завадський"
 }
 
-### Спроба передати невалідний UUID (422 Unprocessable Entity)
+### Спроба передати невалідний UUID (Очікується 422 Unprocessable Entity)
 POST http://localhost:8080/api/lending/loans
 Content-Type: application/json
 

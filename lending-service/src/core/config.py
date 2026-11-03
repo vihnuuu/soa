@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     rabbit_host: str = "rabbitmq"
     rabbit_queue: str = "loan_notifications"
     rabbit_dlq: str = "loan_notifications_dlq"
+    rabbit_dlx: str = "dlx_exchange"
+    rabbit_reply_queue: str = "loan_saga_replies"
     environment: str = "development"
     debug: bool = False
     saga_timeout_seconds: int = 30

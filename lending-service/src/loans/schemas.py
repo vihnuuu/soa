@@ -4,9 +4,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class LoanRequest(BaseModel):
-  book_id: str = Field(..., min_length=1)
+  book_id: UUID
   borrower_name: str = Field(..., min_length=1)
-  owner_id: str = Field(..., min_length=1)
+  owner_id: UUID
 
 
 class LoanResponse(BaseModel):

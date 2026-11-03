@@ -20,7 +20,7 @@ async def create_book(
         return await service.create_book(book_in)
     except BookAlreadyExistsError:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_409_CONFLICT,
             detail="Книга з таким ID вже існує",
         )
 
@@ -45,4 +45,19 @@ async def get_book(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Книга не знайдена або доступ обмежений",
+        )
+
+
+@router.patch("/{book_id}/availability", response_model=BookResponse)
+async def update_book_availability(
+    book_id: str,
+    is_available: bool,
+    service: BookService = Depends(get_book_service),
+):
+    try:
+        return await service.update_availability(book_id, is_available)
+    except BookNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Книга не знайдена",
         )
