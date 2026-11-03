@@ -40,14 +40,26 @@ class LoanService:
     async def get_loans(self, owner_id: str | None = None) -> list[Loan]:
         return await self.repository.list_all(owner_id)
 
+    async def _set_availability(self, book_id: str, is_available: bool) -> None:
+        try:
+            await self.catalog_client.update_book_availability(
+                book_id, is_available
+            )
+        except (
+            CatalogServiceUnavailableError,
+            BookCatalogNotFoundError,
+            CatalogServiceBadResponseError,
+        ) as exc:
+            logger.warning(
+                f"Не вдалося оновити доступність книги {book_id} у каталозі: "
+                f"{type(exc).__name__}"
+            )
+
     async def create_loan(self, loan_in: LoanRequest) -> str:
-        book = await self.catalog_client.verify_book(
+        await self.catalog_client.verify_book(
             book_id=str(loan_in.book_id),
             owner_id=str(loan_in.owner_id),
         )
-
-        if not book.get("is_available", True):
-            raise BookAlreadyLoanedError()
 
         if await self.repository.is_book_active(loan_in.book_id):
             raise BookAlreadyLoanedError()
@@ -73,6 +85,7 @@ class LoanService:
         )
 
         await self.repository.create_with_outbox(record, outbox_event)
+        await self._set_availability(str(loan_in.book_id), False)
         return str(loan_id)
 
     async def return_loan(self, loan_id: str) -> str:
@@ -110,19 +123,6 @@ class LoanService:
         await self.repository.update_status_with_outbox(
             str(actual_loan_id), "RETURNED", outbox_event
         )
-
-        try:
-            await self.catalog_client.update_book_availability(
-                str(record.book_id), True
-            )
-        except (
-            CatalogServiceUnavailableError,
-            BookCatalogNotFoundError,
-            CatalogServiceBadResponseError,
-        ) as exc:
-            logger.warning(
-                f"Не вдалося оновити доступність книги {record.book_id} у каталозі: "
-                f"{type(exc).__name__}"
-            )
+        await self._set_availability(str(record.book_id), True)
 
         return str(actual_loan_id)

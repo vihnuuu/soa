@@ -9,6 +9,9 @@ from src.loans.saga_compensator import run_saga_dlq_consumer
 from src.loans.timeout_watcher import run_saga_timeout_watcher
 from src.loans.worker import process_outbox_messages
 from src.loans.saga_confirmer import run_saga_confirmer
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

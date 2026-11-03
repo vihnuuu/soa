@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import update
+from src.clients.catalog_client import catalog_client
 from src.core.config import settings
 from src.core.database import async_session_factory
 from src.loans.models import Loan, LoanStatus
@@ -22,9 +23,19 @@ async def cancel_timed_out_pending_loans() -> int:
                     Loan.created_at < threshold,
                 )
                 .values(status=LoanStatus.CANCELLED)
-                .returning(Loan.id)
+                .returning(Loan.book_id)
             )
-            return len(result.scalars().all())
+            book_ids = result.scalars().all()
+
+    for book_id in book_ids:
+        try:
+            await catalog_client.update_book_availability(str(book_id), True)
+        except Exception as exc:
+            logger.warning(
+                f"[SAGA TIMEOUT] Не вдалося повернути доступність книги {book_id}: "
+                f"{type(exc).__name__}"
+            )
+    return len(book_ids)
 
 
 async def run_saga_timeout_watcher() -> None:

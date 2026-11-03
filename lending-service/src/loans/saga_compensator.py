@@ -4,6 +4,7 @@ import logging
 import uuid
 import aio_pika
 from sqlalchemy import update
+from src.clients.catalog_client import catalog_client
 from src.core.config import settings
 from src.core.database import async_session_factory
 from src.loans.models import Loan, LoanStatus
@@ -21,16 +22,28 @@ async def compensate_loan(loan_id: str) -> None:
                     Loan.status.in_([LoanStatus.PENDING, LoanStatus.ACTIVE]),
                 )
                 .values(status=LoanStatus.CANCELLED)
+                .returning(Loan.book_id)
             )
             res = await session.execute(stmt)
-            if res.rowcount > 0:
-                logger.warning(
-                    f"[SAGA COMPENSATION] Позику {loan_id} успішно СКАСОВАНО (відкат через DLQ)"
-                )
-            else:
-                logger.info(
-                    f"[SAGA COMPENSATION] Позика {loan_id} не в статусі PENDING або не знайдена"
-                )
+            book_ids = res.scalars().all()
+
+    if not book_ids:
+        logger.info(
+            f"[SAGA COMPENSATION] Позика {loan_id} не в статусі PENDING або не знайдена"
+        )
+        return
+
+    logger.warning(
+        f"[SAGA COMPENSATION] Позику {loan_id} успішно СКАСОВАНО (відкат через DLQ)"
+    )
+    for book_id in book_ids:
+        try:
+            await catalog_client.update_book_availability(str(book_id), True)
+        except Exception as exc:
+            logger.warning(
+                f"[SAGA COMPENSATION] Не вдалося повернути доступність книги {book_id}: "
+                f"{type(exc).__name__}"
+            )
 
 
 async def run_saga_dlq_consumer() -> None:
