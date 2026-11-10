@@ -8,8 +8,8 @@ Content-Type: application/json
 
 {
   "id": "{{$uuid}}",
-  "title": "Гаррі Поттер",
-  "author": "Джоан Роулінг",
+  "title": "Доріан Грей",
+  "author": "Оскра Вайлд",
   "owner_id": "00000000-0000-0000-0000-000000000002",
   "is_available": true
 }

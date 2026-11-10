@@ -9,4 +9,6 @@ __pycache__/
 venv/
 *.pyo
 .pytest_cache/
-.coverage
+.coverageai-agents/test_llm.py
+ai-agents/test_models.py
+ai-agents/test_llm.py
