@@ -7,11 +7,14 @@ import os
 import uvicorn
 from a2a.types import AgentSkill
 
-from agents2agents.common import SkillExecutor, SkillRejected, build_app, make_card, parse_json_request
+from agent2agent.common import SkillExecutor, SkillRejected, build_app, make_card, parse_json_request
 from agentlib.config import get_settings
 from agentlib.library_api import LibraryAPI
 from agentlib.llm_agent import LLMAgent, make_client
 from agentlib.tools import LibraryTools, safe_call
+
+from shared.security.auth import SecurityConfig, create_security
+from shared.security.pii import anonymize_data
 
 HOST = os.getenv("PRODUCER_HOST", "127.0.0.1")
 PORT = int(os.getenv("PRODUCER_PORT", "9101"))
@@ -78,22 +81,53 @@ class ProducerExecutor(SkillExecutor):
         outcome = await safe_call(self.registry[tool_name], args)
         if not outcome["ok"]:
             raise SkillRejected(outcome["error"])
+
+        response_data = {
+            "skill": skill,
+            "event_type": event_type,
+            "event_queued": True,
+            **outcome["data"],
+        }
+
         return json.dumps(
-            {"skill": skill, "event_type": event_type, "event_queued": True, **outcome["data"]}, ensure_ascii=False
+            anonymize_data(response_data),
+            ensure_ascii=False,
         )
 
 
+
 def create_app():
+    security = create_security(
+        SecurityConfig(
+            service_name="a2a-producer",
+            issuer=os.environ["JWT_ISSUER"],
+            jwks_url=os.environ["JWT_JWKS_URL"],
+            audience=os.environ["JWT_AUDIENCE"],
+            authorization_url=os.environ["OAUTH_AUTHORIZATION_URL"],
+            token_url=os.environ["OAUTH_TOKEN_URL"],
+            scopes={
+                "loans:read": "Read loans",
+                "loans:write": "Create and return loans",
+            },
+        )
+    )
+
     card = make_card(
         name="Library Loan Producer Agent",
         description=(
-            "Produces loan events of the library system (LoanCreated, LoanReturned) by issuing and returning "
-            "loans via the lending service."
+            "Produces loan events of the library system "
+            "(LoanCreated, LoanReturned) by issuing and "
+            "returning loans via the lending service."
         ),
         url=PUBLIC_URL,
         skills=SKILLS,
     )
-    return build_app(card, ProducerExecutor())
+
+    return build_app(
+        card,
+        ProducerExecutor(),
+        token_verifier=security.decode_token,
+    )
 
 
 def main() -> None:

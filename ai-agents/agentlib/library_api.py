@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import os
+
 import httpx
 
 from agentlib.exceptions import LibraryAPIError
@@ -29,7 +31,9 @@ def _describe_error(res: httpx.Response) -> str:
 class LibraryAPI:
     def __init__(self, gateway_url: str, timeout: float = 5.0, client: httpx.AsyncClient | None = None) -> None:
         self.base = gateway_url.rstrip("/")
-        self._client = client or httpx.AsyncClient(timeout=timeout)
+        token = os.getenv("LIBRARY_API_TOKEN")  # access token from Keycloak
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        self._client = client or httpx.AsyncClient(timeout=timeout, headers=headers)
 
     async def aclose(self) -> None:
         await self._client.aclose()

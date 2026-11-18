@@ -1,12 +1,20 @@
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from shared.security import clean_text
 
 
 class LoanRequest(BaseModel):
+  model_config = ConfigDict(extra="forbid")
+
   book_id: UUID
-  borrower_name: str = Field(..., min_length=1)
+  borrower_name: str = Field(..., min_length=1, max_length=255)
   owner_id: UUID
+
+  @field_validator("borrower_name")
+  @classmethod
+  def _guard_text(cls, v: str) -> str:
+    return clean_text(v, field="borrower_name")
 
 
 class LoanResponse(BaseModel):

@@ -3,8 +3,9 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
-COPY requirements.txt .
+COPY catalog-service/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
+COPY shared ./shared
+COPY catalog-service/ .
 EXPOSE 8001
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8001"]

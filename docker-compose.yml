@@ -3,19 +3,31 @@ services:
     image: postgres:16-alpine
     container_name: library_postgres
     environment:
-      POSTGRES_USER: library_user
-      POSTGRES_PASSWORD: library_password
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: catalog_db
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U library_user -d catalog_db" ]
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - library_net
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     networks:
       - library_net
 
@@ -23,8 +35,8 @@ services:
     image: rabbitmq:3-management
     restart: unless-stopped
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s
@@ -33,28 +45,83 @@ services:
     networks:
       - library_net
 
-  catalog-service:
-    build: ./catalog-service
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: library_keycloak
+    command: start-dev --import-realm
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+asyncpg://library_user:library_password@postgres:5432/catalog_db
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:?set KEYCLOAK_ADMIN in .env}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in .env}
+      KC_HOSTNAME: http://localhost:8180
+      KC_HTTP_ENABLED: "true"
+      LENDING_CLIENT_SECRET: ${LENDING_CLIENT_SECRET:?set LENDING_CLIENT_SECRET in .env}
+      A2A_CONSUMER_CLIENT_SECRET: ${A2A_CONSUMER_CLIENT_SECRET:?set A2A_CONSUMER_CLIENT_SECRET in .env}
+      STUDENT_PASSWORD: ${STUDENT_PASSWORD:?set STUDENT_PASSWORD in .env}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+    ports:
+      - "127.0.0.1:8180:8080"
+    volumes:
+      - ./keycloak/realm-library.json:/opt/keycloak/data/import/realm-library.json:ro
+    networks:
+      - library_net
+
+  keycloak-init:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: library_keycloak_init
+    restart: "no"
+    # tr strips CR so the script also works when checked out with CRLF (Windows)
+    entrypoint: ["/bin/bash", "-c", "tr -d '\\r' < /opt/init/kc-init.sh | bash"]
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:?set KEYCLOAK_ADMIN in .env}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in .env}
+    volumes:
+      - ./keycloak/kc-init.sh:/opt/init/kc-init.sh:ro
+    depends_on:
+      - keycloak
+    networks:
+      - library_net
+
+  catalog-service:
+    build:
+      context: .
+      dockerfile: catalog-service/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/catalog_db
+      REDIS_URL: redis://redis:6379/0
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
     networks:
       - library_net
 
   lending-service:
-    build: ./lending-service
+    build:
+      context: .
+      dockerfile: lending-service/Dockerfile
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+asyncpg://library_user:library_password@postgres:5432/lending_db
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/lending_db
       CATALOG_SERVICE_URL: http://catalog-service:8001
       RABBIT_HOST: rabbitmq
+      REDIS_URL: redis://redis:6379/0
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-120}
+      OIDC_CLIENT_SECRET: ${LENDING_CLIENT_SECRET:?set LENDING_CLIENT_SECRET in .env}
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       catalog-service:
+        condition: service_started
+      keycloak:
         condition: service_started
       rabbitmq:
         condition: service_healthy
@@ -65,7 +132,7 @@ services:
     build: ./notification-service
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+asyncpg://library_user:library_password@postgres:5432/notification_db
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/notification_db
       RABBIT_HOST: rabbitmq
       SIMULATE_SAGA_FAULT: "${SIMULATE_SAGA_FAULT:-false}"
     depends_on:

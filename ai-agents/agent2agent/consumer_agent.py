@@ -3,18 +3,22 @@ from __future__ import annotations
 import json
 import logging
 import os
+import httpx
 
 import uvicorn
 from a2a.types import AgentSkill
 
-from agents2agents.a2a_client import A2ACallError, call_agent
-from agents2agents.common import SkillExecutor, SkillRejected, build_app, make_card, parse_json_request
-from agents2agents.notification_store import NotificationStore
+from agent2agent.a2a_client import A2ACallError, call_agent
+from agent2agent.common import SkillExecutor, SkillRejected, build_app, make_card, parse_json_request
+from agent2agent.notification_store import NotificationStore
 from agentlib.config import get_settings
 from agentlib.exceptions import ToolInputError, ToolPermissionError
 from agentlib.guardrails import require_text, require_uuid
 from agentlib.llm_agent import LLMAgent, make_client
 from agentlib.tools import Tool, resolve_owner
+
+from shared.security.auth import SecurityConfig, create_security
+from shared.security.pii import anonymize_data
 
 HOST = os.getenv("CONSUMER_HOST", "127.0.0.1")
 PORT = int(os.getenv("CONSUMER_PORT", "9102"))
@@ -67,6 +71,20 @@ class ConsumerExecutor(SkillExecutor):
         if self.s.llm_api_key:
             self.llm = LLMAgent(make_client(self.s), self._tools(), self.s, system_prompt=CONSUMER_PROMPT)
 
+    async def _get_producer_token(self) -> str:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                os.environ["OAUTH_TOKEN_URL"],
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": "a2a-consumer",
+                    "client_secret": os.environ["A2A_CONSUMER_CLIENT_SECRET"],
+                    "scope": "loans:write",
+                },
+            )
+            response.raise_for_status()
+            return response.json()["access_token"]
+
     async def _issue_via_producer(self, args: dict) -> dict:
         owner = resolve_owner(self.s, args.get("owner_id"))
         payload = {
@@ -76,7 +94,17 @@ class ConsumerExecutor(SkillExecutor):
             "owner_id": owner,
         }
         try:
-            reply = await call_agent(self.producer_url, json.dumps(payload, ensure_ascii=False))
+            token = await self._get_producer_token()
+
+            reply = await call_agent(
+                self.producer_url,
+                json.dumps(payload, ensure_ascii=False),
+                access_token=token,
+            )
+        except httpx.HTTPError:
+            raise SkillRejected("Сервер авторизації Keycloak недоступний або відхилив запит") from None
+        except (KeyError, ValueError):
+            raise SkillRejected("Некоректна відповідь сервера авторизації") from None
         except A2ACallError as exc:
             raise SkillRejected(f"producer-агент недоступний: {exc}") from None
         if not reply.ok or not reply.artifacts:
@@ -150,7 +178,11 @@ class ConsumerExecutor(SkillExecutor):
                 wait = min(max(float(request.get("wait_seconds", 0)), 0), 20)
                 rows = await self._check(loan_id, wait)
                 return json.dumps(
-                    {"loan_id": loan_id, "notification_received": bool(rows), "notifications": rows},
+                    anonymize_data({
+                        "loan_id": loan_id,
+                        "notification_received": bool(rows),
+                        "notifications": rows,
+                    }),
                     ensure_ascii=False,
                 )
 
@@ -179,16 +211,37 @@ class ConsumerExecutor(SkillExecutor):
 
 
 def create_app():
+    security = create_security(
+        SecurityConfig(
+            service_name="a2a-consumer",
+            issuer=os.environ["JWT_ISSUER"],
+            jwks_url=os.environ["JWT_JWKS_URL"],
+            audience=os.environ["JWT_AUDIENCE"],
+            authorization_url=os.environ["OAUTH_AUTHORIZATION_URL"],
+            token_url=os.environ["OAUTH_TOKEN_URL"],
+            scopes={
+                "loans:read": "Read loan notifications",
+                "loans:write": "Create loans",
+            },
+        )
+    )
+
     card = make_card(
         name="Library Notification Consumer Agent",
         description=(
-            "Consumer side of the library system: knows which loan notifications were received and can "
-            "orchestrate loans through the Producer agent over A2A."
+            "Consumer side of the library system: knows which loan "
+            "notifications were received and can orchestrate loans "
+            "through the Producer agent over A2A."
         ),
         url=PUBLIC_URL,
         skills=SKILLS,
     )
-    return build_app(card, ConsumerExecutor())
+
+    return build_app(
+        card,
+        ConsumerExecutor(),
+        token_verifier=security.decode_token,
+    )
 
 
 def main() -> None:

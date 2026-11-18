@@ -1,89 +1,156 @@
+@baseUrl = http://localhost:8080
+@ownerId = 00000000-0000-0000-0000-000000000002
+
 ### Перевірка працездатності сервісу каталогу
-GET http://localhost:8080/api/catalog/health
+GET {{baseUrl}}/api/catalog/health
 Accept: application/json
 
 ### Створення нової книги
-POST http://localhost:8080/api/catalog/books
+POST {{baseUrl}}/api/catalog/books
 Content-Type: application/json
+Accept: application/json
+Authorization: Bearer {{access_token}}
 
 {
   "id": "{{$uuid}}",
   "title": "Доріан Грей",
-  "author": "Оскра Вайлд",
-  "owner_id": "00000000-0000-0000-0000-000000000002",
+  "author": "Оскар Вайлд",
+  "owner_id": "{{ownerId}}",
   "is_available": true
 }
 
 > {%
+  if (response.body && response.body.id) {
     client.global.set("book_id", response.body.id);
+  }
 %}
 
 ### Отримання інформації про останню створену книгу за її ID
-GET http://localhost:8080/api/catalog/books/{{book_id}}?owner_id=00000000-0000-0000-0000-000000000002
+GET {{baseUrl}}/api/catalog/books/{{book_id}}?owner_id={{ownerId}}
 Accept: application/json
+Authorization: Bearer {{access_token}}
 
 ### Отримання всіх книг власника
-GET http://localhost:8080/api/catalog/books?owner_id=00000000-0000-0000-0000-000000000002
+GET {{baseUrl}}/api/catalog/books?owner_id={{ownerId}}
 Accept: application/json
+Authorization: Bearer {{access_token}}
 
-### Оформлення позики (запуск SAGA та Outbox) —  202 Accepted
-POST http://localhost:8080/api/lending/loans
+### Оформлення позики (запуск SAGA та Outbox; очікується 202 Accepted)
+POST {{baseUrl}}/api/lending/loans
 Content-Type: application/json
+Accept: application/json
+Authorization: Bearer {{access_token}}
 
 {
   "book_id": "{{book_id}}",
-  "owner_id": "00000000-0000-0000-0000-000000000002",
+  "owner_id": "{{ownerId}}",
   "borrower_name": "Степан Радченко"
 }
 
 > {%
+  if (response.body && response.body.loan_id) {
     client.global.set("loan_id", response.body.loan_id);
+  }
 %}
 
-### Спроба повторно оформити позику на ту ж саму книгу (409 Conflict)
-POST http://localhost:8080/api/lending/loans
+### Спроба повторно оформити позику на ту ж книгу (можливий 409 Conflict залежно від стану SAGA)
+POST {{baseUrl}}/api/lending/loans
 Content-Type: application/json
+Authorization: Bearer {{access_token}}
 
 {
   "book_id": "{{book_id}}",
-  "owner_id": "00000000-0000-0000-0000-000000000002",
+  "owner_id": "{{ownerId}}",
   "borrower_name": "Паралельний запит"
 }
 
 ### Перевірка статусу позики після обробки Outbox/SAGA
-GET http://localhost:8080/api/lending/loans/{{loan_id}}
+GET {{baseUrl}}/api/lending/loans/{{loan_id}}
 Accept: application/json
+Authorization: Bearer {{access_token}}
 
 ### Отримати тільки активні позики
-GET http://localhost:8080/api/lending/loans/active?owner_id=00000000-0000-0000-0000-000000000002
+GET {{baseUrl}}/api/lending/loans/active?owner_id={{ownerId}}
 Accept: application/json
+Authorization: Bearer {{access_token}}
 
 ### Отримати історію всіх позик
-GET http://localhost:8080/api/lending/loans?owner_id=00000000-0000-0000-0000-000000000002
+GET {{baseUrl}}/api/lending/loans?owner_id={{ownerId}}
 Accept: application/json
+Authorization: Bearer {{access_token}}
 
-### Повернення книги
-POST http://localhost:8080/api/lending/loans/{{loan_id}}/return
+### Повернення книги (виконати після перевірки позики)
+POST {{baseUrl}}/api/lending/loans/{{loan_id}}/return
 Content-Type: application/json
+Authorization: Bearer {{access_token}}
 
 {}
 
-### Спроба видати неіснуючу книгу (404 Not Found)
-POST http://localhost:8080/api/lending/loans
+### Спроба видати неіснуючу книгу (очікується 404 Not Found)
+POST {{baseUrl}}/api/lending/loans
 Content-Type: application/json
+Authorization: Bearer {{access_token}}
 
 {
   "book_id": "00000000-0000-0000-0000-000000000999",
-  "owner_id": "00000000-0000-0000-0000-000000000002",
+  "owner_id": "{{ownerId}}",
   "borrower_name": "Левко Завадський"
 }
 
-### Спроба передати невалідний UUID (422 Unprocessable Entity)
-POST http://localhost:8080/api/lending/loans
+### Спроба передати невалідний UUID (очікується 422 Unprocessable Entity)
+POST {{baseUrl}}/api/lending/loans
 Content-Type: application/json
+Authorization: Bearer {{access_token}}
 
 {
   "book_id": "invalid-uuid",
-  "owner_id": "00000000-0000-0000-0000-000000000002",
+  "owner_id": "{{ownerId}}",
   "borrower_name": "Надійка Поліщук"
 }
+
+### JWT: запит до захищеного каталогу з дійсним токеном
+GET {{baseUrl}}/api/catalog/books?owner_id={{ownerId}}
+Accept: application/json
+Authorization: Bearer {{access_token}}
+
+### JWT: запит без токена (очікується 401, якщо маршрут захищений)
+GET {{baseUrl}}/api/catalog/books?owner_id={{ownerId}}
+Accept: application/json
+
+### JWT: некоректний токен (очікується 401, якщо маршрут захищений)
+GET {{baseUrl}}/api/catalog/books?owner_id={{ownerId}}
+Accept: application/json
+Authorization: Bearer invalid.jwt.token
+
+### OAuth Scopes: спроба створити позику з токеном лише для читання (очікується 403 за відповідної політики)
+POST {{baseUrl}}/api/lending/loans
+Content-Type: application/json
+Authorization: Bearer {{read_only_token}}
+
+{
+  "book_id": "{{book_id}}",
+  "owner_id": "{{ownerId}}",
+  "borrower_name": "Scope Security Test"
+}
+
+### CORS: preflight з дозволеного джерела cad.kpi.ua
+OPTIONS {{baseUrl}}/api/catalog/books
+Origin: https://cad.kpi.ua
+Access-Control-Request-Method: GET
+Access-Control-Request-Headers: authorization,content-type
+
+### CORS: звичайний запит із дозволеного джерела
+GET {{baseUrl}}/api/catalog/health
+Origin: https://cad.kpi.ua
+Accept: application/json
+
+### CORS: preflight зі стороннього джерела (не має отримати дозвіл для example.com)
+OPTIONS {{baseUrl}}/api/catalog/books
+Origin: https://example.com
+Access-Control-Request-Method: GET
+Access-Control-Request-Headers: authorization,content-type
+
+### Rate Limiting: повторюйте цей запит понад налаштований ліміт (очікується 429)
+GET {{baseUrl}}/api/catalog/books?owner_id={{ownerId}}
+Accept: application/json
+Authorization: Bearer {{access_token}}

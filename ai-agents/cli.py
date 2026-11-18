@@ -64,7 +64,7 @@ async def amain(args: argparse.Namespace) -> None:
         result = await agent.run(prompt)
         print(f"\nАгент: {result.answer}")
         print(f"\n- stop={result.stop_reason}, кроків={result.steps}, викликів інструментів={result.tool_calls}, "
-              f"токенів={result.tokens_used}, tainted={result.tainted}")
+              f"токенів={result.tokens_used}, tainted={result.tainted}, guardrails={result.guardrails}")
     finally:
         await api.aclose()
 

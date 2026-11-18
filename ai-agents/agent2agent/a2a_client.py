@@ -33,13 +33,33 @@ async def fetch_card(base_url: str):
         return await A2ACardResolver(http, base_url).get_agent_card()
 
 
-async def call_agent(base_url: str, text: str, *, timeout: float = 60.0) -> AgentReply:
+async def call_agent( base_url: str, text: str, *, timeout: float = 60.0, access_token: str | None = None,) -> AgentReply:
     try:
         card = await fetch_card(base_url)
     except Exception as exc:
         raise A2ACallError(f"agent at {base_url} is unreachable: {type(exc).__name__}") from None
 
-    client = await create_client(card, client_config=ClientConfig(streaming=False))
+    if not access_token:
+        raise A2ACallError("Service access token is required")
+
+    http_client = httpx.AsyncClient(
+        timeout=timeout,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+
+    try:
+        client = await create_client(
+            card,
+            client_config=ClientConfig(
+                streaming=False,
+                httpx_client=http_client,
+            ),
+        )
+    except Exception:
+        await http_client.aclose()
+        raise
     reply: AgentReply | None = None
 
     async def consume() -> None:
@@ -63,7 +83,10 @@ async def call_agent(base_url: str, text: str, *, timeout: float = 60.0) -> Agen
     except asyncio.TimeoutError:
         raise A2ACallError(f"agent {card.name} did not answer within {timeout}s") from None
     finally:
-        await client.close()
+        try:
+            await client.close()
+        finally:
+            await http_client.aclose()
 
     if reply is None:
         raise A2ACallError(f"agent {card.name} returned no response")

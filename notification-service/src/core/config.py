@@ -12,9 +12,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     simulate_saga_fault: bool = False
 
-    database_url: PostgresDsn = (
-        "postgresql+asyncpg://library_user:library_password@postgres:5432/notification_db"
-    )
+    database_url: PostgresDsn
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -9,6 +9,8 @@ __pycache__/
 venv/
 *.pyo
 .pytest_cache/
-.coverageai-agents/test_llm.py
-ai-agents/test_models.py
+.coverage
 ai-agents/test_llm.py
+ai-agents/test_models.py
+
+/keycloak-data-backup/

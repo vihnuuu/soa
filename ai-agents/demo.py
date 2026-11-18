@@ -6,7 +6,7 @@ import json
 import os
 import uuid
 
-from agents2agents.a2a_client import call_agent, fetch_card
+from agent2agent.a2a_client import call_agent, fetch_card
 from agentlib.config import get_settings
 from agentlib.library_api import LibraryAPI
 

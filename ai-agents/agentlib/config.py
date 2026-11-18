@@ -42,20 +42,17 @@ def _bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    # REST API
     gateway_url: str = "http://localhost:8080"
     default_owner_id: str | None = DEFAULT_OWNER
     allowed_owner_ids: tuple[str, ...] = (DEFAULT_OWNER,)
     http_timeout: float = 5.0
 
-    # LLM
     llm_model: str = "gpt-4.1-mini"
     llm_base_url: str | None = None
     llm_api_key: str | None = None
-    llm_reasoning: str = "auto"  # auto | true | false
+    llm_reasoning: str = "auto"
     llm_token_param: str = "max_completion_tokens"
 
-    # Guardrails: витрати
     max_tokens_per_call: int = 800
     token_budget: int = 20_000
     max_steps: int = 10
@@ -64,10 +61,12 @@ class Settings:
     max_list_items: int = 20
     max_prompt_chars: int = 4000
 
-    # Guardrails: безпека
-    confirm_writes: bool = True
+    max_output_chars: int = 4000
+    agent_runs_per_minute: int = 30
 
-    # MCP
+    confirm_writes: bool = True
+    block_prompt_injection: bool = True
+
     mcp_read_only: bool = False
     mcp_calls_per_minute: int = 60
 
@@ -96,7 +95,10 @@ class Settings:
             max_tool_result_chars=_int("MAX_TOOL_RESULT_CHARS", 3000),
             max_list_items=_int("MAX_LIST_ITEMS", 20),
             max_prompt_chars=_int("MAX_PROMPT_CHARS", 4000),
+            max_output_chars=_int("MAX_OUTPUT_CHARS", 4000),
+            agent_runs_per_minute=_int("AGENT_RUNS_PER_MINUTE", 30),
             confirm_writes=_bool("CONFIRM_WRITES", True),
+            block_prompt_injection=_bool("BLOCK_PROMPT_INJECTION", True),
             mcp_read_only=_bool("MCP_READ_ONLY", False),
             mcp_calls_per_minute=_int("MCP_CALLS_PER_MINUTE", 60),
         )

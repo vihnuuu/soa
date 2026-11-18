@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from src.core.config import settings
 from src.core.database import Base, engine
 from src.loans.models import Loan, OutboxMessage
@@ -34,6 +35,20 @@ app = FastAPI(
     title=settings.app_title,
     root_path=settings.root_path,
     lifespan=lifespan,
+    swagger_ui_init_oauth={
+        "clientId": settings.oidc_swagger_client_id,
+        "usePkceWithAuthorizationCodeGrant": True,
+    },
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allowed_origins,
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,
+    max_age=600,
+)
+
 
 app.include_router(loans_router)

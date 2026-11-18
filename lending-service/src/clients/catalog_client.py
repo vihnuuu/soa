@@ -1,4 +1,5 @@
 import httpx
+from src.clients.token_provider import TokenProviderError, token_provider
 from src.core.config import settings
 from src.loans.exceptions import (
     BookCatalogNotFoundError,
@@ -12,11 +13,16 @@ class CatalogClient:
         self.base_url = base_url.rstrip("/")
 
     async def verify_book(self, book_id: str, owner_id: str) -> dict:
+        try:
+            headers = await token_provider.auth_headers()
+        except TokenProviderError as exc:
+            raise CatalogServiceUnavailableError() from exc
         async with httpx.AsyncClient() as client:
             try:
                 res = await client.get(
                     f"{self.base_url}/books/{book_id}",
                     params={"owner_id": owner_id},
+                    headers=headers,
                     timeout=3.0,
                 )
             except httpx.RequestError as exc:
@@ -33,11 +39,16 @@ class CatalogClient:
     async def update_book_availability(
         self, book_id: str, is_available: bool
     ) -> dict:
+        try:
+            headers = await token_provider.auth_headers()
+        except TokenProviderError as exc:
+            raise CatalogServiceUnavailableError() from exc
         async with httpx.AsyncClient() as client:
             try:
                 res = await client.patch(
                     f"{self.base_url}/books/{book_id}/availability",
                     params={"is_available": is_available},
+                    headers=headers,
                     timeout=3.0,
                 )
             except httpx.RequestError as exc:

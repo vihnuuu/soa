@@ -15,9 +15,35 @@ class Settings(BaseSettings):
     debug: bool = False
     saga_timeout_seconds: int = 30
 
-    database_url: PostgresDsn = (
-        "postgresql+asyncpg://library_user:library_password@postgres:5432/lending_db"
+    database_url: PostgresDsn
+
+    oidc_issuer: str = "http://localhost:8180/realms/library"
+    oidc_audience: str = "lending-service"
+    oidc_jwks_url: str = (
+        "http://keycloak:8080/realms/library/protocol/openid-connect/certs"
     )
+    oidc_authorization_url: str = (
+        "http://localhost:8180/realms/library/protocol/openid-connect/auth"
+    )
+    oidc_public_token_url: str = (
+        "http://localhost:8180/realms/library/protocol/openid-connect/token"
+    )
+    oidc_swagger_client_id: str = "library-web"
+
+    trusted_service_clients: list[str] = []
+    rate_limit_per_minute: int = 120
+    redis_url: str | None = None
+
+    oidc_token_url: str = (
+        "http://keycloak:8080/realms/library/protocol/openid-connect/token"
+    )
+    oidc_client_id: str = "lending-service"
+    oidc_client_secret: str
+
+    cors_allowed_origins: list[str] = [
+        "https://cad.kpi.ua",
+        "http://cad.kpi.ua",
+    ]
 
     model_config = SettingsConfigDict(
         env_file=".env",

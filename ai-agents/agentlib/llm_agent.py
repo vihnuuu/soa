@@ -2,15 +2,25 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 import openai
 
 from agentlib.config import Settings
-from agentlib.exceptions import BudgetExceeded
-from agentlib.guardrails import TokenBudget, estimate_tokens, render_tool_result
+from agentlib.exceptions import BudgetExceeded, RateLimitExceeded
+from agentlib.guardrails import (
+    RateLimiter,
+    TokenBudget,
+    check_model_output,
+    check_user_input,
+    estimate_tokens,
+    render_tool_result,
+)
 from agentlib.tools import Tool, safe_call
+
+from shared.security.pii import anonymize_text
 
 logger = logging.getLogger("agentlib.agent")
 
@@ -56,6 +66,7 @@ class AgentResult:
     tokens_used: int = 0
     tainted: bool = False
     trace: list[str] = field(default_factory=list)
+    guardrails: list[str] = field(default_factory=list)
 
 
 class LLMAgent:
@@ -77,6 +88,19 @@ class LLMAgent:
         prompt = system_prompt or SYSTEM_PROMPT
         self.system_prompt = prompt if is_reasoning_model(settings) else prompt + PLAN_HINT
         self.on_event = on_event
+        self.run_limiter = RateLimiter(settings.agent_runs_per_minute, 60)
+
+    def _guard_output(self, text: str, trace: list[str], findings: list[str]) -> str:
+        verdict = check_model_output(
+            text,
+            system_prompt=self.system_prompt,
+            secrets=(self.s.llm_api_key, os.getenv("LIBRARY_API_TOKEN")),
+            max_chars=self.s.max_output_chars,
+        )
+        if verdict.findings:
+            findings.extend(verdict.findings)
+            self._emit(trace, f"  [output guardrail] {', '.join(verdict.findings)}")
+        return anonymize_text(verdict.text)
 
     def _emit(self, trace: list[str], line: str) -> None:
         trace.append(line)
@@ -100,8 +124,36 @@ class LLMAgent:
     async def run(self, prompt: str) -> AgentResult:
         s = self.s
         trace: list[str] = []
-        if len(prompt) > s.max_prompt_chars:
-            return AgentResult("Запит задовгий (guardrail max_prompt_chars).", "prompt_too_long", trace=trace)
+        guard_findings: list[str] = []
+
+        try:
+            self.run_limiter.check()
+        except RateLimitExceeded as exc:
+            self._emit(trace, f"[error] {exc}")
+            return AgentResult("Забагато запитів до агента, спробуйте пізніше.", "rate_limited", trace=trace)
+
+        verdict = check_user_input(
+            prompt,
+            max_chars=s.max_prompt_chars,
+            block_injection=s.block_prompt_injection,
+        )
+        guard_findings.extend(verdict.findings)
+        if verdict.blocked:
+            self._emit(trace, f"[input guardrail] {', '.join(verdict.findings)}")
+            if "prompt_too_long" in verdict.findings:
+                return AgentResult(
+                    "Запит задовгий (guardrail max_prompt_chars).",
+                    "prompt_too_long",
+                    trace=trace,
+                    guardrails=guard_findings,
+                )
+            return AgentResult(
+                "Запит відхилено guardrail: він порожній або містить інструкції, що намагаються змінити поведінку агента.",
+                "input_blocked",
+                trace=trace,
+                guardrails=guard_findings,
+            )
+        prompt = anonymize_text(verdict.text)
 
         budget = TokenBudget(s.token_budget)
         messages: list[dict] = [
@@ -112,7 +164,7 @@ class LLMAgent:
         n_calls = 0
 
         def result(answer: str, reason: str, step: int) -> AgentResult:
-            return AgentResult(answer, reason, step, n_calls, budget.used, tainted, trace)
+            return AgentResult(answer, reason, step, n_calls, budget.used, tainted, trace, guard_findings)
 
         for step in range(1, s.max_steps + 1):
             try:
@@ -138,13 +190,35 @@ class LLMAgent:
             self._emit(trace, f"[крок {step}] токени: {budget.used}/{s.token_budget}")
 
             if not calls:
-                return result(msg.content or "", "final", step)
+                return result(self._guard_output(msg.content or "", trace, guard_findings), "final", step)
+
+            safe_tool_calls = []
+
+            for call in calls:
+                call_data = call.model_dump(exclude_none=True)
+
+                if "function" in call_data:
+                    raw_arguments = call_data["function"].get(
+                        "arguments", "{}"
+                    )
+
+                    call_data["function"]["arguments"] = (
+                        anonymize_text(raw_arguments)
+                    )
+
+                safe_tool_calls.append(call_data)
 
             messages.append(
                 {
                     "role": "assistant",
-                    "content": msg.content,
-                    "tool_calls": [c.model_dump(exclude_none=True) for c in calls],
+                    "content": (
+                        self._guard_output(
+                            msg.content, trace, guard_findings
+                        )
+                        if msg.content
+                        else msg.content
+                    ),
+                    "tool_calls": safe_tool_calls,
                 }
             )
 
@@ -169,8 +243,14 @@ class LLMAgent:
                     allowed, why = await self._may_execute(tool, args, tainted)
                     envelope = await safe_call(tool, args) if allowed else {"ok": False, "error": why}
 
-                self._emit(trace, f"  -> {name}({call.function.arguments}) = {'ok' if envelope.get('ok') else 'ERR'}")
+                self._emit(
+                    trace,
+                    f"  -> {name}("
+                    f"{anonymize_text(call.function.arguments or '{}')}"
+                    f") = {'ok' if envelope.get('ok') else 'ERR'}"
+                )
                 content, findings = render_tool_result(name, envelope, max_chars=s.max_tool_result_chars)
+                content = anonymize_text(content)
                 if findings:
                     tainted = True
                     self._emit(trace, f"  [warning] prompt injection у даних інструмента: {', '.join(findings)}")

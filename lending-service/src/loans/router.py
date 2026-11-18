@@ -1,5 +1,6 @@
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Security, status
+from src.core.security import Principal, get_principal, require_owner, resolve_owner
 from src.loans.dependencies import get_loan_service
 from src.loans.exceptions import (
     BookAlreadyLoanedError,
@@ -15,6 +16,15 @@ from src.loans.service import LoanService
 router = APIRouter(prefix="/loans", tags=["Loans"])
 
 
+def _check_owner(loan, principal: Principal) -> None:
+    if not principal.is_trusted_service and str(loan.owner_id).lower() != principal.subject.lower():
+        raise LoanNotFoundError()
+
+
+async def _ensure_loan_owner(service: LoanService, loan_id: UUID, principal: Principal) -> None:
+    _check_owner(await service.get_loan(str(loan_id)), principal)
+
+
 @router.post(
     "",
     response_model=LoanActionResponse,
@@ -22,10 +32,13 @@ router = APIRouter(prefix="/loans", tags=["Loans"])
 )
 async def create_loan(
     loan_in: LoanRequest,
+    principal: Principal = Security(get_principal, scopes=["lending:write"]),
     service: LoanService = Depends(get_loan_service),
 ):
+    owner = require_owner(principal, loan_in.owner_id)
+    verified = loan_in.model_copy(update={"owner_id": owner})
     try:
-        loan_id = await service.create_loan(loan_in)
+        loan_id = await service.create_loan(verified)
         return {"message": "Запит на оформлення позики прийнято в обробку", "loan_id": str(loan_id)}
     except CatalogServiceUnavailableError:
         raise HTTPException(
@@ -53,25 +66,32 @@ async def create_loan(
 @router.get("/", response_model=list[LoanResponse], include_in_schema=False)
 async def get_loans(
     owner_id: UUID | None = Query(default=None),
+    principal: Principal = Security(get_principal, scopes=["lending:read"]),
     service: LoanService = Depends(get_loan_service),
 ):
-    return await service.get_loans(str(owner_id) if owner_id else None)
+    return await service.get_loans(resolve_owner(principal, owner_id))
 
 
 @router.get("/active", response_model=list[LoanResponse])
 async def get_active_loans(
     owner_id: UUID | None = Query(default=None),
+    principal: Principal = Security(get_principal, scopes=["lending:read"]),
     service: LoanService = Depends(get_loan_service),
 ):
-    return await service.get_active_loans(str(owner_id) if owner_id else None)
+    return await service.get_active_loans(resolve_owner(principal, owner_id))
 
 
-@router.post("/{loan_id}/return", response_model=LoanActionResponse)
+@router.post(
+    "/{loan_id}/return",
+    response_model=LoanActionResponse,
+)
 async def return_loan(
     loan_id: UUID,
+    principal: Principal = Security(get_principal, scopes=["lending:write"]),
     service: LoanService = Depends(get_loan_service),
 ):
     try:
+        await _ensure_loan_owner(service, loan_id, principal)
         res_id = await service.return_loan(str(loan_id))
         return {"message": "Книгу повернено, позику завершено", "loan_id": str(res_id)}
     except LoanNotFoundError:
@@ -89,10 +109,13 @@ async def return_loan(
 @router.get("/{loan_id}", response_model=LoanResponse)
 async def get_loan(
     loan_id: UUID,
+    principal: Principal = Security(get_principal, scopes=["lending:read"]),
     service: LoanService = Depends(get_loan_service),
 ):
     try:
-        return await service.get_loan(str(loan_id))
+        loan = await service.get_loan(str(loan_id))
+        _check_owner(loan, principal)
+        return loan
     except LoanNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
