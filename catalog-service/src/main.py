@@ -6,6 +6,7 @@ from src.core.config import settings
 from src.core.database import engine, Base
 from src.books.router import router as books_router
 from src.books.models import Book  # noqa: F401
+from shared.observability import setup_observability
 
 
 @asynccontextmanager
@@ -34,6 +35,8 @@ app.add_middleware(
     max_age=600,
 )
 
+
+setup_observability(app, "catalog-service", engine=engine)
 
 app.include_router(books_router)
 

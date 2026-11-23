@@ -1,7 +1,10 @@
 from src.core.database import async_session_factory
 from src.notifications.repository import NotificationRepository
 from src.notifications.schemas import EventType, LoanNotificationEvent
+import logging
 from src.core.config import settings
+
+logger = logging.getLogger("notification_service")
 
 class NotificationProcessingError(Exception):
     pass
@@ -41,19 +44,17 @@ class NotificationService:
                     message=message,
                 )
                 if not inserted:
-                    print(
-                        f"\n[Notification Service] Дубльована подія {event.event_id} "
-                        f"для позики {p.loan_id} пропущена (ідемпотентність)",
-                        flush=True,
+                    logger.warning(
+                        "duplicate_event_skipped",
+                        extra={"event_id": event.event_id, "loan_id": p.loan_id},
                     )
                     return
         except Exception as exc:
             raise NotificationProcessingError(f"Помилка запису в БД: {exc}") from exc
 
-        print(
-            f"\n[Notification Service] {event.event_type}: "
-            f"збережено сповіщення для позики {p.loan_id}",
-            flush=True,
+        logger.info(
+            "notification_saved",
+            extra={"event_type": str(event.event_type), "loan_id": p.loan_id},
         )
 
 

@@ -8,6 +8,7 @@ from src.clients.catalog_client import catalog_client
 from src.core.config import settings
 from src.core.database import async_session_factory
 from src.loans.models import Loan, LoanStatus
+from src.loans.metrics import SAGA_COMPENSATIONS
 
 logger = logging.getLogger("saga_compensator")
 
@@ -33,8 +34,10 @@ async def compensate_loan(loan_id: str) -> None:
         )
         return
 
+    SAGA_COMPENSATIONS.labels("dlq").inc()
     logger.warning(
-        f"[SAGA COMPENSATION] Позику {loan_id} успішно СКАСОВАНО (відкат через DLQ)"
+        f"[SAGA COMPENSATION] Позику {loan_id} успішно СКАСОВАНО (відкат через DLQ)",
+        extra={"loan_id": loan_id, "reason": "dlq"},
     )
     for book_id in book_ids:
         try:

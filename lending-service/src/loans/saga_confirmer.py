@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timezone
 import logging
 import uuid
 import aio_pika
@@ -7,8 +8,11 @@ from sqlalchemy import update
 from src.core.config import settings
 from src.core.database import async_session_factory
 from src.loans.models import Loan, LoanStatus
+from src.loans.metrics import SAGA_CONFIRMATION_SECONDS, SAGA_CONFIRMED
+from shared.observability import extract_context, get_tracer
 
 logger = logging.getLogger("saga_confirmer")
+tracer = get_tracer("saga_confirmer")
 
 
 async def confirm_loan(loan_id: str) -> None:
@@ -21,9 +25,18 @@ async def confirm_loan(loan_id: str) -> None:
                     Loan.status == LoanStatus.PENDING,
                 )
                 .values(status=LoanStatus.ACTIVE)
+                .returning(Loan.created_at)
             )
-            if res.rowcount > 0:
-                logger.info(f"[SAGA CONFIRM] Позику {loan_id} підтверджено (ACTIVE)")
+            confirmed = res.all()
+            if confirmed:
+                SAGA_CONFIRMED.inc()
+                SAGA_CONFIRMATION_SECONDS.observe(
+                    max(0.0, (datetime.now(timezone.utc) - confirmed[0][0]).total_seconds())
+                )
+                logger.info(
+                    f"[SAGA CONFIRM] Позику {loan_id} підтверджено (ACTIVE)",
+                    extra={"loan_id": loan_id},
+                )
             else:
                 logger.warning(
                     f"[SAGA CONFIRM] Позика {loan_id} вже не PENDING "
@@ -63,7 +76,12 @@ async def run_saga_confirmer() -> None:
                             continue
 
                         try:
-                            await confirm_loan(loan_id)
+                            with tracer.start_as_current_span(
+                                "saga.confirm",
+                                context=extract_context(data.get("trace_context")),
+                                attributes={"loan.id": loan_id},
+                            ):
+                                await confirm_loan(loan_id)
                             await message.ack()
                         except Exception as err:
                             logger.error(f"[SAGA Confirmer] Помилка підтвердження: {err}")

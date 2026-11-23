@@ -10,9 +10,8 @@ from src.loans.saga_compensator import run_saga_dlq_consumer
 from src.loans.timeout_watcher import run_saga_timeout_watcher
 from src.loans.worker import process_outbox_messages
 from src.loans.saga_confirmer import run_saga_confirmer
-import logging
-
-logging.basicConfig(level=logging.INFO)
+from src.loans.metrics import run_metrics_collector
+from shared.observability import setup_observability
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -24,6 +23,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_saga_dlq_consumer()),
         asyncio.create_task(run_saga_timeout_watcher()),
         asyncio.create_task(run_saga_confirmer()),
+        asyncio.create_task(run_metrics_collector()),
     ]
     yield
     for task in tasks:
@@ -50,5 +50,7 @@ app.add_middleware(
     max_age=600,
 )
 
+
+setup_observability(app, "lending-service", engine=engine)
 
 app.include_router(loans_router)

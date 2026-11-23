@@ -1,13 +1,17 @@
 import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import select
 from src.broker.publisher import event_publisher
 from src.core.database import async_session_factory
 from src.loans.models import Loan, LoanStatus, OutboxMessage, OutboxStatus
+from src.loans.metrics import OUTBOX_PUBLISH_SECONDS, OUTBOX_PUBLISHED
+from shared.observability import extract_context, get_tracer, inject_trace_context
 
 logger = logging.getLogger("outbox_worker")
+tracer = get_tracer("outbox_worker")
 
 MAX_RETRIES = 5
 
@@ -40,33 +44,52 @@ async def _process_one() -> str:
                     )
                     msg.status = OutboxStatus.PROCESSED
                     msg.processed_at = datetime.now(timezone.utc)
+                    OUTBOX_PUBLISHED.labels("skipped").inc()
                     return "ok"
 
-            event_data = {
-                "event_id": str(msg.id),
-                "event_type": msg.event_type,
-                "payload": msg.payload,
-            }
-            try:
-                await event_publisher.publish(event_data)
-            except Exception as exc:
-                msg.retry_count = (msg.retry_count or 0) + 1
-                if msg.retry_count >= MAX_RETRIES:
-                    msg.status = OutboxStatus.FAILED
-                    logger.error(
-                        f"Outbox {msg.id} -> FAILED після {msg.retry_count} спроб: {exc}. "
-                        f"Позику скасує timeout watcher."
-                    )
-                else:
-                    logger.error(
-                        f"Помилка публікації outbox {msg.id} "
-                        f"(спроба {msg.retry_count}/{MAX_RETRIES}): {exc}"
-                    )
-                return "error"
+            payload = dict(msg.payload)
+            trace_ctx = payload.pop("_trace", {}) or {}
+            parent = extract_context(trace_ctx)
 
-            msg.status = OutboxStatus.PROCESSED
-            msg.processed_at = datetime.now(timezone.utc)
-            return "ok"
+            with tracer.start_as_current_span(
+                "outbox.publish", context=parent, attributes={"messaging.destination": "loan_notifications"}
+            ):
+                event_data = {
+                    "event_id": str(msg.id),
+                    "event_type": msg.event_type,
+                    "payload": payload,
+                    "trace_context": inject_trace_context(),
+                }
+                started = time.perf_counter()
+                try:
+                    await event_publisher.publish(event_data)
+                except Exception as exc:
+                    OUTBOX_PUBLISH_SECONDS.observe(time.perf_counter() - started)
+                    msg.retry_count = (msg.retry_count or 0) + 1
+                    if msg.retry_count >= MAX_RETRIES:
+                        msg.status = OutboxStatus.FAILED
+                        OUTBOX_PUBLISHED.labels("failed").inc()
+                        logger.error(
+                            "outbox_failed",
+                            extra={"outbox_id": str(msg.id), "retries": msg.retry_count, "error": str(exc)},
+                        )
+                    else:
+                        OUTBOX_PUBLISHED.labels("error").inc()
+                        logger.error(
+                            "outbox_publish_error",
+                            extra={"outbox_id": str(msg.id), "attempt": msg.retry_count, "error": str(exc)},
+                        )
+                    return "error"
+
+                OUTBOX_PUBLISH_SECONDS.observe(time.perf_counter() - started)
+                OUTBOX_PUBLISHED.labels("ok").inc()
+                msg.status = OutboxStatus.PROCESSED
+                msg.processed_at = datetime.now(timezone.utc)
+                logger.info(
+                    "outbox_published",
+                    extra={"outbox_id": str(msg.id), "event_type": msg.event_type},
+                )
+                return "ok"
 
 
 async def process_outbox_messages() -> None:

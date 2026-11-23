@@ -71,7 +71,6 @@ services:
     image: quay.io/keycloak/keycloak:26.0
     container_name: library_keycloak_init
     restart: "no"
-    # tr strips CR so the script also works when checked out with CRLF (Windows)
     entrypoint: ["/bin/bash", "-c", "tr -d '\\r' < /opt/init/kc-init.sh | bash"]
     environment:
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:?set KEYCLOAK_ADMIN in .env}

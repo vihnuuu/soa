@@ -1,0 +1,169 @@
+groups:
+  - name: soa-critical
+    rules:
+      - alert: NodeDown
+        expr: up == 0
+        for: 15s
+        labels:
+          severity: critical
+          category: availability
+          service: "{{ $labels.job }}"
+        annotations:
+          summary: "{{ $labels.job }} недоступний"
+          description: "Prometheus не може зняти метрики з {{ $labels.instance }} (job={{ $labels.job }}) понад 15 с."
+
+      - alert: HighLatencyP99
+        expr: service:http_request_duration_seconds:p99 > 1
+        for: 30s
+        labels:
+          severity: critical
+          category: latency
+        annotations:
+          summary: "p99 latency {{ $labels.service }} = {{ $value | humanizeDuration }} (поріг 1 с)"
+          description: "99-й перцентиль часу відповіді сервісу {{ $labels.service }} перевищує 1 секунду понад 30 с."
+
+      - alert: OutboxReplicationLagHigh
+        expr: outbox_oldest_new_age_seconds > 15
+        for: 10s
+        labels:
+          severity: critical
+          category: replication_lag
+          service: lending-service
+        annotations:
+          summary: "Відставання outbox {{ $value | humanizeDuration }} (поріг 15 с)"
+          description: "Найстаріше outbox-повідомлення не опубліковане в RabbitMQ вже {{ $value | humanizeDuration }}. Імовірно недоступний брокер."
+
+  - name: soa-warning
+    rules:
+      - alert: HighErrorRate
+        expr: service:http_errors:ratio_rate1m > 0.05
+        for: 30s
+        labels:
+          severity: warning
+          category: errors
+        annotations:
+          summary: "{{ $labels.service }}: частка 5xx {{ $value | humanizePercentage }}"
+          description: "Понад 5% запитів до {{ $labels.service }} завершуються помилкою 5xx."
+
+      - alert: OutboxMessagesFailed
+        expr: outbox_messages{status="FAILED"} > 0
+        for: 10s
+        labels:
+          severity: critical
+          category: replication_lag
+          service: lending-service
+        annotations:
+          summary: "{{ $value }} outbox-повідомлень у статусі FAILED"
+          description: "Публікацію вичерпано (5 спроб). Відповідні позики будуть скасовані timeout watcher."
+
+      - alert: SagaStuckPending
+        expr: saga_pending_oldest_age_seconds > 20
+        for: 5s
+        labels:
+          severity: warning
+          category: saga
+          service: lending-service
+        annotations:
+          summary: "SAGA не завершується вже {{ $value | humanizeDuration }}"
+          description: "Позика в статусі PENDING; таймаут SAGA — 30 с, після нього спрацює компенсація."
+
+      - alert: SagaCompensationFired
+        expr: increase(saga_compensations_total[2m]) > 0
+        labels:
+          severity: warning
+          category: saga
+          service: lending-service
+        annotations:
+          summary: "Спрацювала компенсація SAGA ({{ $labels.reason }})"
+          description: "Позики скасовано через {{ $labels.reason }}; перевірте notification-service і RabbitMQ."
+
+      - alert: RabbitMQQueueBacklog
+        expr: rabbitmq_detailed_queue_messages_ready{queue="loan_notifications"} > 10
+        for: 30s
+        labels:
+          severity: warning
+          category: replication_lag
+          service: rabbitmq
+        annotations:
+          summary: "У черзі loan_notifications {{ $value }} необроблених повідомлень"
+          description: "Споживач notification-service не встигає або недоступний."
+
+      - alert: NotificationConsumerMissing
+        expr: rabbitmq_detailed_queue_consumers{queue="loan_notifications"} == 0
+        for: 30s
+        labels:
+          severity: warning
+          category: availability
+          service: notification-service
+        annotations:
+          summary: "У черги loan_notifications немає споживачів"
+          description: "notification-service не підключений до черги."
+
+      - alert: HighCpuUsage
+        expr: rate(process_cpu_seconds_total{job=~"catalog-service|lending-service|notification-service"}[1m]) > 0.8
+        for: 1m
+        labels:
+          severity: warning
+          category: resources
+        annotations:
+          summary: "{{ $labels.job }}: CPU {{ $value | humanizePercentage }} одного ядра"
+          description: "Тривале високе споживання CPU процесом {{ $labels.job }}."
+
+      - alert: NotificationConsumerDisconnected
+        expr: notification_consumer_connected == 0
+        for: 30s
+        labels:
+          severity: critical
+          category: availability
+          service: notification-service
+        annotations:
+          summary: "notification-service відключений від RabbitMQ"
+          description: "Консьюмер notification-service не підключений до брокера понад 30 с — події SAGA не обробляються."
+
+      - alert: NotificationErrorRateHigh
+        expr: service:notification_errors:ratio_rate5m > 0.05
+        for: 1m
+        labels:
+          severity: warning
+          category: errors
+        annotations:
+          summary: "notification-service: частка помилок обробки {{ $value | humanizePercentage }}"
+          description: "Понад 5% подій з RabbitMQ обробляються з помилкою (result != ok)."
+
+      - alert: NotificationProcessingSlow
+        expr: service:notification_processing_seconds:p99 > 2
+        for: 1m
+        labels:
+          severity: warning
+          category: latency
+        annotations:
+          summary: "notification-service: p99 обробки події {{ $value | humanizeDuration }} (поріг 2 с)"
+          description: "99-й перцентиль часу обробки повідомлення перевищує 2 секунди."
+
+  - name: soa-aiops
+    rules:
+      - alert: LatencyAnomalyDetected
+        expr: |
+          service:http_request_duration_seconds:p95_5m > 0.2
+          and
+          service:http_request_duration_seconds:p95_5m
+            > avg_over_time(service:http_request_duration_seconds:p95_5m[1h])
+              + 3 * stddev_over_time(service:http_request_duration_seconds:p95_5m[1h])
+        for: 2m
+        labels:
+          severity: warning
+          category: anomaly
+        annotations:
+          summary: "Аномалія латентності {{ $labels.service }} (p95 > μ+3σ)"
+          description: "p95 {{ $labels.service }} статистично вийшов за межі норми за останню годину — ознака деградації."
+
+      - alert: OutboxBacklogGrowthPredicted
+        expr: predict_linear(outbox_messages{status="NEW"}[10m], 600) > 100
+        for: 1m
+        labels:
+          severity: warning
+          category: predictive
+          service: lending-service
+        annotations:
+          summary: "Прогноз: outbox backlog > 100 через 10 хв"
+          description: "Лінійна екстраполяція показує, що черга неопублікованих подій неконтрольовано росте."

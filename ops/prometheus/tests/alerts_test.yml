@@ -1,0 +1,135 @@
+rule_files:
+  - ../rules/recording.yml
+  - ../rules/alerts.yml
+
+evaluation_interval: 5s
+
+tests:
+  - interval: 5s
+    input_series:
+      - series: 'up{job="catalog-service",instance="catalog-service:8001"}'
+        values: "1x5 0x30"
+    alert_rule_test:
+      - eval_time: 20s
+        alertname: NodeDown
+        exp_alerts: []
+      - eval_time: 60s
+        alertname: NodeDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              category: availability
+              service: catalog-service
+              job: catalog-service
+              instance: "catalog-service:8001"
+            exp_annotations:
+              summary: "catalog-service недоступний"
+              description: "Prometheus не може зняти метрики з catalog-service:8001 (job=catalog-service) понад 15 с."
+
+  - interval: 5s
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{service="lending-service",method="GET",path="/loans",le="1"}'
+        values: "0+0x60"
+      - series: 'http_request_duration_seconds_bucket{service="lending-service",method="GET",path="/loans",le="2.5"}'
+        values: "0+10x60"
+      - series: 'http_request_duration_seconds_bucket{service="lending-service",method="GET",path="/loans",le="+Inf"}'
+        values: "0+10x60"
+
+      - series: 'http_request_duration_seconds_bucket{service="catalog-service",method="GET",path="/books",le="0.1"}'
+        values: "0+10x60"
+      - series: 'http_request_duration_seconds_bucket{service="catalog-service",method="GET",path="/books",le="+Inf"}'
+        values: "0+10x60"
+    alert_rule_test:
+      - eval_time: 120s
+        alertname: HighLatencyP99
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              category: latency
+              service: lending-service
+            exp_annotations:
+              summary: "p99 latency lending-service = 2.485s (поріг 1 с)"
+              description: "99-й перцентиль часу відповіді сервісу lending-service перевищує 1 секунду понад 30 с."
+
+  - interval: 5s
+    input_series:
+      - series: 'outbox_oldest_new_age_seconds{job="lending-service"}'
+        values: "0 0 0 2 4 6 8 10 12 14 16 18 20 22 24 26 28 30"
+    alert_rule_test:
+      - eval_time: 25s
+        alertname: OutboxReplicationLagHigh
+        exp_alerts: []
+      - eval_time: 80s
+        alertname: OutboxReplicationLagHigh
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              category: replication_lag
+              service: lending-service
+              job: lending-service
+            exp_annotations:
+              summary: "Відставання outbox 28s (поріг 15 с)"
+              description: "Найстаріше outbox-повідомлення не опубліковане в RabbitMQ вже 28s. Імовірно недоступний брокер."
+
+  - interval: 5s
+    input_series:
+      - series: 'notification_processing_seconds_bucket{job="notification-service",le="0.1"}'
+        values: '0+2x150'
+      - series: 'notification_processing_seconds_bucket{job="notification-service",le="1"}'
+        values: '0+5x150'
+      - series: 'notification_processing_seconds_bucket{job="notification-service",le="+Inf"}'
+        values: '0+5x150'
+      - series: 'notification_events_total{job="notification-service",result="ok"}'
+        values: '0+4x150'
+      - series: 'notification_events_total{job="notification-service",result="rejected"}'
+        values: '0+1x150'
+    promql_expr_test:
+      - expr: 'service:notification_events:rate5m{service="notification-service"}'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'service:notification_events:rate5m{service="notification-service"}'
+            value: 1
+      - expr: 'service:notification_errors:ratio_rate5m'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'service:notification_errors:ratio_rate5m{service="notification-service"}'
+            value: 0.2
+
+  - interval: 5s
+    input_series:
+      - series: 'notification_consumer_connected{job="notification-service",instance="notification-service:9102"}'
+        values: "1x5 0x20"
+    alert_rule_test:
+      - eval_time: 20s
+        alertname: NotificationConsumerDisconnected
+        exp_alerts: []
+      - eval_time: 90s
+        alertname: NotificationConsumerDisconnected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              category: availability
+              service: notification-service
+              job: notification-service
+              instance: "notification-service:9102"
+            exp_annotations:
+              summary: "notification-service відключений від RabbitMQ"
+              description: "Консьюмер notification-service не підключений до брокера понад 30 с — події SAGA не обробляються."
+
+  - interval: 5s
+    input_series:
+      - series: 'notification_events_total{job="notification-service",result="ok"}'
+        values: '0+1x60'
+      - series: 'notification_events_total{job="notification-service",result="rejected"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: NotificationErrorRateHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              category: errors
+              service: notification-service
+            exp_annotations:
+              summary: "notification-service: частка помилок обробки 50%"
+              description: "Понад 5% подій з RabbitMQ обробляються з помилкою (result != ok)."

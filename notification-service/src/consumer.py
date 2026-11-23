@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import time
 import uuid
 import pika
@@ -12,6 +13,19 @@ from src.notifications.service import (
     notification_service,
 )
 from src.reply_publisher import ReplyPublisher, ReplyPublishError, reply_publisher
+from src.observability import (
+    CONSUMER_UP,
+    EVENTS,
+    PROCESSING_SECONDS,
+    REPLIES,
+    extract_context,
+    get_tracer,
+    inject_trace_context,
+)
+from opentelemetry.trace import SpanKind
+
+logger = logging.getLogger("notification_consumer")
+tracer = get_tracer()
 
 
 class NotificationConsumer:
@@ -32,6 +46,27 @@ class NotificationConsumer:
         self.dlx_name = dlx_name
 
     def _callback(self, ch, method, properties, body: bytes) -> None:
+        started = time.perf_counter()
+        carrier, event_type = None, "unknown"
+        try:
+            raw = json.loads(body.decode("utf-8"))
+            if isinstance(raw, dict):
+                carrier = raw.get("trace_context")
+                event_type = str(raw.get("event_type", "unknown"))
+        except ValueError:
+            pass
+
+        with tracer.start_as_current_span(
+            "notification.consume",
+            context=extract_context(carrier),
+            kind=SpanKind.CONSUMER,
+            attributes={"messaging.system": "rabbitmq", "messaging.destination": self.queue_name},
+        ):
+            result = self._process(ch, method, body)
+            EVENTS.labels(event_type, result).inc()
+            PROCESSING_SECONDS.labels(event_type).observe(time.perf_counter() - started)
+
+    def _process(self, ch, method, body: bytes) -> str:
         try:
             raw_data = json.loads(body.decode("utf-8"))
             event = LoanNotificationEvent.model_validate(raw_data)
@@ -43,20 +78,18 @@ class NotificationConsumer:
             ValidationError,
             ValueError,
         ) as exc:
-            print(
-                f"[Notification Service] Помилка обробки: {exc}. Перенаправлення повідомлення у DLQ",
-                flush=True,
+            logger.error(
+                "event_rejected_to_dlq", extra={"error": str(exc), "reason": "processing_error"}
             )
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-            return
+            return "rejected"
 
         except Exception as exc:
-            print(
-                f"[Notification Service] Непередбачена помилка: {exc}. Відхилення повідомлення без requeue",
-                flush=True,
+            logger.error(
+                "event_rejected_to_dlq", extra={"error": str(exc), "reason": "unexpected"}
             )
             ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-            return
+            return "rejected"
 
         if event.event_type == EventType.LOAN_CREATED:
             try:
@@ -68,18 +101,22 @@ class NotificationConsumer:
                             "loan_id": event.payload.loan_id,
                             "source_event_id": event.event_id,
                         },
+                        "trace_context": inject_trace_context(),
                     }
                 )
+                REPLIES.labels("ok").inc()
             except ReplyPublishError as exc:
-                print(
-                    f"[Notification Service] Не вдалося опублікувати reply: {exc}. Повтор доставки",
-                    flush=True,
+                REPLIES.labels("error").inc()
+                logger.error(
+                    "saga_reply_failed_requeue",
+                    extra={"error": str(exc), "loan_id": event.payload.loan_id},
                 )
                 time.sleep(1)
                 ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-                return
+                return "requeued"
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
+        return "ok"
 
     def start(self) -> None:
         while True:
@@ -122,31 +159,30 @@ class NotificationConsumer:
                     on_message_callback=self._callback,
                 )
 
-                print(
-                    f"[Notification Service] Підключено до RabbitMQ ({self.host}). "
-                    f"Очікування подій з черги '{self.queue_name}' (DLQ: '{self.dlq_name}')..."
-                    f" simulate_saga_fault={settings.simulate_saga_fault}",
-                    flush=True,
+                CONSUMER_UP.set(1)
+                logger.info(
+                    "rabbitmq_connected",
+                    extra={
+                        "host": self.host,
+                        "queue": self.queue_name,
+                        "dlq": self.dlq_name,
+                        "simulate_saga_fault": settings.simulate_saga_fault,
+                    },
                 )
                 channel.start_consuming()
 
             except pika.exceptions.AMQPConnectionError:
-                print(
-                    "[Notification Service] RabbitMQ тимчасово недоступний. "
-                    "Повторна спроба через 3 сек...",
-                    flush=True,
-                )
+                CONSUMER_UP.set(0)
+                logger.error("rabbitmq_unavailable", extra={"retry_in_s": 3})
                 time.sleep(3)
 
             except KeyboardInterrupt:
-                print("[Notification Service] Зупинка сервісу", flush=True)
+                logger.info("shutdown")
                 break
 
             except Exception as exc:
-                print(
-                    f"[Notification Service] Несподіваний збій у циклі з'єднання: {exc}. Перепідключення...",
-                    flush=True,
-                )
+                CONSUMER_UP.set(0)
+                logger.error("consumer_loop_failure", extra={"error": str(exc)})
                 time.sleep(3)
 
             finally:

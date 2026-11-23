@@ -12,6 +12,8 @@ from src.loans.exceptions import (
 from src.loans.models import Loan, OutboxMessage, OutboxStatus
 from src.loans.repository import LoanRepository
 from src.loans.schemas import LoanRequest
+from src.loans.metrics import LOANS_CREATED, LOANS_RETURNED
+from shared.observability import inject_trace_context
 
 logger = logging.getLogger("loan_service")
 
@@ -80,11 +82,16 @@ class LoanService:
 
         outbox_event = OutboxMessage(
             event_type="LoanCreated",
-            payload=record,
+            payload={**record, "_trace": inject_trace_context()},
             status=OutboxStatus.NEW,
         )
 
         await self.repository.create_with_outbox(record, outbox_event)
+        LOANS_CREATED.inc()
+        logger.info(
+            "loan_accepted",
+            extra={"loan_id": str(loan_id), "book_id": str(loan_in.book_id)},
+        )
         await self._set_availability(str(loan_in.book_id), False)
         return str(loan_id)
 
@@ -116,6 +123,7 @@ class LoanService:
                 "owner_id": (
                     str(record.owner_id) if hasattr(record, "owner_id") else ""
                 ),
+                "_trace": inject_trace_context(),
             },
             status=OutboxStatus.NEW,
         )
@@ -123,6 +131,8 @@ class LoanService:
         await self.repository.update_status_with_outbox(
             str(actual_loan_id), "RETURNED", outbox_event
         )
+        LOANS_RETURNED.inc()
+        logger.info("loan_returned", extra={"loan_id": str(actual_loan_id)})
         await self._set_availability(str(record.book_id), True)
 
         return str(actual_loan_id)

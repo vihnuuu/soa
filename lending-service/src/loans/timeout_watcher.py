@@ -6,6 +6,7 @@ from src.clients.catalog_client import catalog_client
 from src.core.config import settings
 from src.core.database import async_session_factory
 from src.loans.models import Loan, LoanStatus
+from src.loans.metrics import SAGA_COMPENSATIONS
 
 logger = logging.getLogger("saga_timeout")
 
@@ -27,6 +28,8 @@ async def cancel_timed_out_pending_loans() -> int:
             )
             book_ids = result.scalars().all()
 
+    if book_ids:
+        SAGA_COMPENSATIONS.labels("timeout").inc(len(book_ids))
     for book_id in book_ids:
         try:
             await catalog_client.update_book_availability(str(book_id), True)

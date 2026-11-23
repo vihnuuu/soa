@@ -1,0 +1,196 @@
+services:
+  catalog-service:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      FAULT_LATENCY_MS: ${CATALOG_FAULT_LATENCY_MS:-0}
+      FAULT_ERROR_RATE: ${CATALOG_FAULT_ERROR_RATE:-0}
+
+  lending-service:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      FAULT_LATENCY_MS: ${LENDING_FAULT_LATENCY_MS:-0}
+      FAULT_ERROR_RATE: ${LENDING_FAULT_ERROR_RATE:-0}
+
+  notification-service:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      METRICS_PORT: "9102"
+
+  rabbitmq:
+    volumes:
+      - ./ops/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=24h
+      - --web.enable-lifecycle
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - alertmanager
+    networks:
+      - library_net
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.16.0
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/catalog_db?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - library_net
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.4.0
+    restart: unless-stopped
+    command: ["--nginx.scrape-uri=http://gateway:8081/stub_status"]
+    depends_on:
+      - gateway
+    networks:
+      - library_net
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    restart: unless-stopped
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./ops/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "127.0.0.1:9093:9093"
+    networks:
+      - library_net
+
+  loki:
+    image: grafana/loki:3.3.2
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    volumes:
+      - ./ops/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    networks:
+      - library_net
+
+  alloy:
+    image: grafana/alloy:v1.5.1
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./ops/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    networks:
+      - library_net
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.65.0
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "127.0.0.1:16686:16686"
+    networks:
+      - library_net
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/soa-observability.json
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+      - loki
+      - jaeger
+    networks:
+      - library_net
+
+  n8n:
+    image: ${N8N_IMAGE:-n8nio/n8n:latest}
+    restart: unless-stopped
+    entrypoint: [ "/bin/sh", "-c" ]
+    command:
+      - |
+        set -e
+        if [ -n "$$GEMINI_API_KEY" ]; then
+          node -e 'require("fs").writeFileSync("/tmp/gemini-cred.json", JSON.stringify([{
+            id: "soaGeminiCred01", name: "Gemini API", type: "googlePalmApi",
+            data: { apiKey: process.env.GEMINI_API_KEY, host: "https://generativelanguage.googleapis.com" }
+          }]))'
+          n8n import:credentials --input=/tmp/gemini-cred.json
+          rm -f /tmp/gemini-cred.json
+        else
+          echo "GEMINI_API_KEY не задано: AI-аналіз вимкнено, тікети створюються з playbook"
+        fi
+        if [ -n "$$JIRA_EMAIL" ] && [ -n "$$JIRA_API_TOKEN" ]; then
+          node -e 'require("fs").writeFileSync("/tmp/jira-cred.json", JSON.stringify([{
+            id: "soaJiraCred01", name: "Jira Cloud", type: "httpBasicAuth",
+            data: { user: process.env.JIRA_EMAIL, password: process.env.JIRA_API_TOKEN }
+          }]))'
+          n8n import:credentials --input=/tmp/jira-cred.json
+          rm -f /tmp/jira-cred.json
+        else
+          echo "JIRA_EMAIL / JIRA_API_TOKEN не задано: тікети в Jira не створюватимуться"
+        fi
+        n8n import:workflow --input=/workflows/incident-response.json
+        n8n update:workflow --id=soaIncidentResponse01 --active=true
+        exec n8n start
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: "5678"
+      WEBHOOK_URL: http://n8n:5678/
+      N8N_SECURE_COOKIE: "false"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      GENERIC_TIMEZONE: Europe/Kyiv
+      TZ: Europe/Kyiv
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-soa-lab6-local-key}
+      JIRA_BASE_URL: ${JIRA_BASE_URL}
+      JIRA_EMAIL: ${JIRA_EMAIL}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN}
+      JIRA_PROJECT_KEY: ${JIRA_PROJECT_KEY:-SOA}
+      JIRA_ISSUE_TYPE: ${JIRA_ISSUE_TYPE:-Task}
+      PROMETHEUS_URL: http://prometheus:9090
+      LOKI_URL: http://loki:3100
+      JAEGER_URL: http://jaeger:16686
+      GRAFANA_PUBLIC_URL: http://localhost:3000
+      JAEGER_PUBLIC_URL: http://localhost:16686
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+    volumes:
+      - ./ops/n8n/workflows:/workflows:ro
+      - n8n_data:/home/node/.n8n
+    ports:
+      - "127.0.0.1:5678:5678"
+    depends_on:
+      - alertmanager
+    networks:
+      - library_net
+
+
+volumes:
+  prometheus_data:
+  loki_data:
+  grafana_data:
+  n8n_data:

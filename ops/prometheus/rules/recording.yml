@@ -1,0 +1,36 @@
+groups:
+  - name: soa-recording
+    interval: 5s
+    rules:
+      - record: service:http_request_duration_seconds:p50
+        expr: histogram_quantile(0.50, sum by (le, service, role) (rate(http_request_duration_seconds_bucket[1m])))
+      - record: service:http_request_duration_seconds:p95
+        expr: histogram_quantile(0.95, sum by (le, service, role) (rate(http_request_duration_seconds_bucket[1m])))
+      - record: service:http_request_duration_seconds:p99
+        expr: histogram_quantile(0.99, sum by (le, service, role) (rate(http_request_duration_seconds_bucket[1m])))
+      - record: service:http_requests:rate1m
+        expr: sum by (service, role) (rate(http_requests_total[1m]))
+      - record: service:http_errors:ratio_rate1m
+        expr: |
+          sum by (service, role) (rate(http_requests_total{status=~"5.."}[1m]))
+          /
+          sum by (service, role) (rate(http_requests_total[1m]))
+      - record: service:http_request_duration_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le, service, role) (rate(http_request_duration_seconds_bucket[5m])))
+
+  - name: notification-recording
+    interval: 5s
+    rules:
+      - record: service:notification_processing_seconds:p50
+        expr: histogram_quantile(0.50, sum by (le, service, role) (label_replace(rate(notification_processing_seconds_bucket[5m]), "service", "notification-service", "job", ".*")))
+      - record: service:notification_processing_seconds:p95
+        expr: histogram_quantile(0.95, sum by (le, service, role) (label_replace(rate(notification_processing_seconds_bucket[5m]), "service", "notification-service", "job", ".*")))
+      - record: service:notification_processing_seconds:p99
+        expr: histogram_quantile(0.99, sum by (le, service, role) (label_replace(rate(notification_processing_seconds_bucket[5m]), "service", "notification-service", "job", ".*")))
+      - record: service:notification_events:rate5m
+        expr: sum by (service, role) (label_replace(rate(notification_events_total[5m]), "service", "notification-service", "job", ".*"))
+      - record: service:notification_errors:ratio_rate5m
+        expr: |
+          sum by (service, role) (label_replace(rate(notification_events_total{result!="ok"}[5m]), "service", "notification-service", "job", ".*"))
+          /
+          clamp_min(sum by (service, role) (label_replace(rate(notification_events_total[5m]), "service", "notification-service", "job", ".*")), 1e-9)

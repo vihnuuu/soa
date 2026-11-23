@@ -31,7 +31,7 @@ def _describe_error(res: httpx.Response) -> str:
 class LibraryAPI:
     def __init__(self, gateway_url: str, timeout: float = 5.0, client: httpx.AsyncClient | None = None) -> None:
         self.base = gateway_url.rstrip("/")
-        token = os.getenv("LIBRARY_API_TOKEN")  # access token from Keycloak
+        token = os.getenv("LIBRARY_API_TOKEN")
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         self._client = client or httpx.AsyncClient(timeout=timeout, headers=headers)
 

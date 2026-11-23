@@ -11,8 +11,6 @@ class TokenProviderError(Exception):
 
 
 class ServiceTokenProvider:
-    """OAuth2 client_credentials grant: lending-service authenticates itself
-    in Keycloak and calls catalog-service with its own access token."""
 
     def __init__(self) -> None:
         self._token: str | None = None

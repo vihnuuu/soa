@@ -65,7 +65,6 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
     async def _check_rate_limit(self, subject: str) -> int | None:
         now = time.monotonic()
         async with self._rate_lock:
-            # Periodically prune expired entries, including inactive subjects.
             for key, history in list(self._requests.items()):
                 while history and now - history[0] >= self.rate_window:
                     history.popleft()
@@ -80,7 +79,6 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         return None
 
     async def dispatch(self, request: Request, call_next: Callable) -> Any:
-        # Agent Card GET endpoints remain publicly readable.
         if request.method != "POST":
             return await call_next(request)
 
@@ -114,8 +112,6 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
                 headers={"WWW-Authenticate": "Bearer"},
             )
         except Exception:
-            # The verifier may also fail because JWKS/Keycloak is unavailable;
-            # distinguishing this requires typed exceptions from the verifier.
             logger.warning("A2A token verification failed", exc_info=True)
             return JSONResponse(
                 {"detail": "Invalid or expired token"},
@@ -144,15 +140,13 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
             if declared_length > self.max_request_bytes:
                 return JSONResponse({"detail": "Request too large"}, status_code=413)
 
-        # Enforce the actual byte limit even if Content-Length is absent.
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)
             if len(body) > self.max_request_bytes:
                 return JSONResponse({"detail": "Request too large"}, status_code=413)
 
-        # A2A JSON-RPC wraps the actual skill inside params.message.parts.
-        # Fail closed: unknown/ambiguous messages require write permission.
+
         try:
             rpc = json.loads(body)
         except (ValueError, UnicodeDecodeError):
@@ -185,7 +179,6 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
                 headers={"WWW-Authenticate": f'Bearer error="insufficient_scope", scope="{required_scope}"'},
             )
 
-        # Restore the consumed body for the downstream JSON-RPC handler.
         request._body = bytes(body)
         return await call_next(request)
 

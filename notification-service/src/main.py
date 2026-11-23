@@ -2,6 +2,7 @@ import asyncio
 from src.core.database import Base, engine
 from src.notifications.models import Notification
 from src.consumer import NotificationConsumer
+from src.observability import setup_observability
 
 
 async def init_models():
@@ -10,6 +11,7 @@ async def init_models():
 
 
 if __name__ == "__main__":
+    setup_observability()
     asyncio.run(init_models())
     consumer = NotificationConsumer()
     consumer.start()
